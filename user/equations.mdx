@@ -1,7 +1,7 @@
 ---
 title: "Equation Strings in Brian2: Model Syntax Reference"
 sidebarTitle: "Equations"
-description: "Brian2 equation strings define neuron and synapse dynamics. Learn the three equation forms, flags, subexpressions, and how to build complex multi-line models."
+description: "Brian2 equation strings define neuron and synapse dynamics. Learn the three equation forms, available flags, subexpressions, and how to compose models."
 ---
 
 Brian2 models are described as systems of first-order ordinary differential equations written in plain text strings. These equation strings are used in both `NeuronGroup` and `Synapses` to define state variables and how they evolve over time. Because they are text, they are easy to build programmatically, pass around as function arguments, or compose from reusable fragments — all without sacrificing readability. Brian2 parses the strings, checks them for consistency, and generates efficient code for your chosen simulation backend.
@@ -148,6 +148,7 @@ Brian2 pre-defines several variables that can be referenced in any equation or c
 | `j` | Post-synaptic neuron index (in `Synapses`) |
 | `N` | Total number of neurons / synapses |
 | `xi`, `xi_*` | Independent Gaussian white noise (units: `1/sqrt(second)`) |
+| `t_in_timesteps` | Current time measured in timesteps |
 | `lastspike` | Time of the last spike (for refractoriness) |
 | `not_refractory` | Boolean: `True` when the neuron may spike |
 | `lastupdate` | Time of the last event-driven update (in `Synapses`) |

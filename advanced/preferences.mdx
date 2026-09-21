@@ -1,7 +1,7 @@
 ---
-title: "Brian2 Preferences: Global Configuration System"
+title: "Brian2 Global Preferences and Configuration System"
 sidebarTitle: "Preferences"
-description: "Configure Brian2 behavior globally with the preferences system. Set codegen targets, compiler options, and other defaults via prefs object or preference files."
+description: "Configure Brian2 behavior globally with the preferences system. Set codegen targets, compiler options, and other defaults via the prefs object or files."
 ---
 
 Brian2 exposes a global preferences system through the `prefs` object that lets you tune simulation behaviour — from the code generation target and compiler flags to floating-point precision and logging verbosity — without modifying individual objects. Preferences use dotted names such as `codegen.cpp.compiler` and can be set interactively in a script, in a per-user configuration file, or in a project-local file. Settings cascade in a well-defined order so that project-specific overrides always take priority.

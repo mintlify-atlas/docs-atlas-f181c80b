@@ -20,10 +20,12 @@ Synapses(
     multisynaptic_index=None,
     namespace=None,
     dtype=None,
+    codeobj_class=None,
     dt=None,
     clock=None,
     order=0,
     method=("exact", "euler", "heun"),
+    method_options=None,
     name="synapses*",
 )
 ```
@@ -47,7 +49,7 @@ Synapses(
   `(constant)`. Reserved names `i`, `j`, and `delay` may not be used as
   variable names.
 
-  ```
+  ```python
   model = """
   dw/dt = -w / tau_w : 1 (clock-driven)
   """
@@ -97,6 +99,17 @@ Synapses(
   time from the local/global scope if not provided.
 </ParamField>
 
+<ParamField path="dtype" type="dtype | dict" optional>
+  Data type for synaptic state variables. A single NumPy dtype applies to
+  all variables; a dict maps individual variable names to specific dtypes.
+  Defaults to `core.default_float_dtype`.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class used to generate and run synaptic code. Defaults
+  to the code generation target set by `set_device`.
+</ParamField>
+
 <ParamField path="dt" type="Quantity" optional>
   Time step for the synaptic state update. Mutually exclusive with `clock`.
 </ParamField>
@@ -112,6 +125,11 @@ Synapses(
 <ParamField path="method" type="str | tuple | StateUpdateMethod" default='("exact", "euler", "heun")'>
   Numerical integration method for synaptic differential equations. The same
   options as in `NeuronGroup` apply.
+</ParamField>
+
+<ParamField path="method_options" type="dict" optional>
+  A dictionary of options passed to the chosen integration method (e.g.
+  `{"simplify": False}`). Applied to the synaptic differential equations.
 </ParamField>
 
 <ParamField path="name" type="str" default='"synapses*"'>
@@ -176,6 +194,12 @@ Synapses.connect(
 <ParamField path="skip_if_invalid" type="bool" default="False">
   If `True`, silently ignore out-of-range index pairs instead of raising an
   `IndexError`. Only applicable with string generator syntax.
+</ParamField>
+
+<ParamField path="namespace" type="dict" optional>
+  An additional namespace for resolving identifiers in string expressions
+  used in `condition`, `i`, `j`, or `p`. If not specified, the locals and
+  globals around the `connect()` call are used.
 </ParamField>
 
 ---

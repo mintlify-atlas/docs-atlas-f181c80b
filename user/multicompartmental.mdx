@@ -93,7 +93,7 @@ morpho.topology()
 
 The `topology()` call prints the branching structure:
 
-```
+```text
 ( )  [root]
    `---|  .L
         `---|  .L.1
@@ -337,7 +337,9 @@ S = Synapses(stim, neuron,
              model='''dg/dt = -g / taus : siemens
                       gs_post = g : siemens (summed)''',
              on_pre='g += 1*nS')
-S.connect(i=[0, 1, 2], j=[morpho[25*um], morpho[25*um], morpho.axon[30*um]])
+S.connect(i=0, j=morpho[25*um])
+S.connect(i=1, j=morpho[25*um])
+S.connect(i=2, j=morpho.axon[30*um])
 
 run(50 * ms)
 ```

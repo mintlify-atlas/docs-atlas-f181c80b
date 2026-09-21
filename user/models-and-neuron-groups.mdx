@@ -1,7 +1,7 @@
 ---
 title: "NeuronGroup: Define and Simulate Neuron Populations"
 sidebarTitle: "Neuron Groups"
-description: "Learn how to define neuron models in Brian2 using NeuronGroup. Covers equation strings, threshold and reset conditions, noise, refractoriness, and subgroups."
+description: "Define neuron models in Brian2 using NeuronGroup. Covers equation strings, threshold and reset conditions, noise, refractoriness, and subgroups."
 ---
 
 The `NeuronGroup` is the core building block of virtually every Brian2 simulation. It represents a population of neurons that share the same equations, threshold condition, and reset rules, but can have different state-variable values (e.g. heterogeneous time constants or initial voltages). You describe the neuron dynamics as a plain text equation string, and Brian2 takes care of generating and running the efficient numerical integration behind the scenes.

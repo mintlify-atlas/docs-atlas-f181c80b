@@ -1,7 +1,7 @@
 ---
 title: "Simulation Scheduling and Clock Management in Brian2"
 sidebarTitle: "Scheduling"
-description: "Understand how Brian2 schedules updates within each timestep. Control execution order with the when and order parameters for neuron groups, synapses, and operations."
+description: "Learn how Brian2 orders simulation updates each timestep. Use when and order parameters to control execution across neuron groups, synapses, and monitors."
 ---
 
 Every Brian2 simulation advances in discrete time steps, and within each step a number of computational objects — state updaters, threshold detectors, reset routines, synaptic propagators, monitors — must execute in a specific, well-defined order. Brian manages this through a **schedule**: a ranked list of named execution slots. Understanding and controlling the schedule allows you to ensure, for example, that a monitor records membrane potentials before a reset is applied, or that a custom network operation runs at exactly the right moment relative to synaptic propagation.

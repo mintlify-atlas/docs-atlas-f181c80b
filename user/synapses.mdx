@@ -1,5 +1,5 @@
 ---
-title: "Synapses in Brian2: Connecting and Modeling Neural Interactions"
+title: "Synapses in Brian2: Models, Connections, and Plasticity"
 sidebarTitle: "Synapses"
 description: "Learn how to define synaptic models in Brian2, connect neuron groups, implement STDP plasticity, and control synaptic delays and weights."
 ---
@@ -190,12 +190,12 @@ STDP is naturally expressed using `(event-driven)` synaptic differential equatio
 from brian2 import *
 
 taupre  = 20 * ms
-taupost = 20 * ms
-wmax    = 0.01
-Apre    =  0.01
-Apost   = -0.0105
+taupost = taupre
+gmax    = 0.01
+dApre   =  0.01 * gmax
+dApost  = -dApre * taupre / taupost * 1.05
 
-G_input  = PoissonGroup(100, rates=10*Hz)
+G_input  = PoissonGroup(100, rates=15*Hz)
 G_output = NeuronGroup(1,
                'dv/dt = -v/(10*ms) : 1',
                threshold='v > 1', reset='v = 0')
@@ -205,15 +205,13 @@ S = Synapses(G_input, G_output,
              dApre/dt  = -Apre  / taupre  : 1 (event-driven)
              dApost/dt = -Apost / taupost : 1 (event-driven)''',
     on_pre='''v_post += w
-              Apre   += dApre_param
-              w = clip(w + Apost, 0, wmax)''',
-    on_post='''Apost += dApost_param
-               w = clip(w + Apre, 0, wmax)''',
-    namespace={'dApre_param': Apre, 'dApost_param': Apost,
-               'wmax': wmax})
+              Apre += dApre
+              w = clip(w + Apost, 0, gmax)''',
+    on_post='''Apost += dApost
+               w = clip(w + Apre, 0, gmax)''')
 
 S.connect()
-S.w = 'rand() * wmax'
+S.w = 'rand() * gmax'
 
 run(1 * second)
 ```

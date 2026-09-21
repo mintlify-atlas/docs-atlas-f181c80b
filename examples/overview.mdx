@@ -1,5 +1,5 @@
 ---
-title: "Brian2 Example Simulations and Network Models"
+title: "Brian2 Example Simulations: Networks and Neuron Models"
 sidebarTitle: "Overview"
 description: "Explore Brian2 example simulations: balanced random networks, Hodgkin-Huxley neurons, STDP plasticity, gap junctions, and adaptive threshold models."
 ---
@@ -102,9 +102,19 @@ The **COBAHH** (Conductance-Based with Hodgkin-Huxley dynamics) benchmark is Ben
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 """
+This is an implementation of a benchmark described
+in the following review paper:
+
+Simulation of networks of spiking neurons: A review of tools and strategies (2006).
+Brette, Rudolph, Carnevale, Hines, Beeman, Bower, Diesmann, Goodman, Harris, Zirpe,
+Natschläger, Pecevski, Ermentrout, Djurfeldt, Lansner, Rochel, Vibert, Alvarez, Muller,
+Davison, El Boustani and Destexhe.
+Journal of Computational Neuroscience
+
 Benchmark 3: random network of HH neurons with exponential synaptic conductances
 
-Clock-driven implementation (no spike time interpolation)
+Clock-driven implementation
+(no spike time interpolation)
 
 R. Brette - Dec 2007
 """

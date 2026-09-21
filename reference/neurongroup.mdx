@@ -13,6 +13,7 @@ NeuronGroup(
     N,
     model,
     method=("exact", "euler", "heun"),
+    method_options=None,
     threshold=None,
     reset=None,
     refractory=False,
@@ -23,6 +24,7 @@ NeuronGroup(
     clock=None,
     order=0,
     name="neurongroup*",
+    codeobj_class=None,
 )
 ```
 
@@ -38,7 +40,7 @@ NeuronGroup(
   `Equations` object. Variable names ending in `_pre` or `_post` are reserved
   for synaptic use and are not allowed here.
 
-  ```
+  ```python
   eqs = """
   dv/dt = (I - v) / tau : volt
   I : volt
@@ -53,6 +55,12 @@ NeuronGroup(
   integrator. A tuple of names causes Brian2 to pick the first applicable
   method automatically. A callable may also be supplied; it receives an
   `Equations` object and returns abstract integration code.
+</ParamField>
+
+<ParamField path="method_options" type="dict" optional>
+  A dictionary of options passed to the chosen integration method. For
+  example, `method_options={"simplify": False}` disables equation
+  simplification in the `exact` integrator.
 </ParamField>
 
 <ParamField path="threshold" type="str" optional>
@@ -95,6 +103,12 @@ NeuronGroup(
   the `Network.run` call.
 </ParamField>
 
+<ParamField path="dtype" type="dtype | dict" optional>
+  Data type for state variables. A single NumPy dtype applies to all
+  variables; a dict maps individual variable names to specific dtypes.
+  Defaults to the Brian2 preference `core.default_float_dtype`.
+</ParamField>
+
 <ParamField path="dt" type="Quantity" optional>
   The simulation time step for this group. Mutually exclusive with `clock`.
   When neither is provided, `defaultclock` is used.
@@ -115,6 +129,12 @@ NeuronGroup(
   A unique name for this object. The trailing `*` causes Brian2 to append an
   auto-increment suffix to avoid collisions (`neurongroup_0`, `neurongroup_1`,
   …). An explicit name (without `*`) is used verbatim.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class used to generate and run code. If not specified,
+  the default code generation target set by `set_device` is used. Only
+  relevant for advanced or custom code-generation backends.
 </ParamField>
 
 ---
@@ -154,6 +174,7 @@ NeuronGroup.run_regularly(
     when="start",
     order=0,
     name=None,
+    codeobj_class=None,
 )
 ```
 
@@ -184,6 +205,11 @@ NeuronGroup.run_regularly(
 <ParamField path="name" type="str" optional>
   Explicit name for the `CodeRunner` object that is created. If omitted, a
   name is derived from the group name.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class to run this code with. Defaults to the group's
+  `codeobj_class` attribute.
 </ParamField>
 
 **Returns** a `CodeRunner` instance that has already been added to the group's

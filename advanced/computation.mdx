@@ -1,7 +1,7 @@
 ---
-title: "Code Generation and Performance in Brian2"
+title: "Code Generation and Computation Backends in Brian2"
 sidebarTitle: "Computation"
-description: "Boost Brian2 simulation performance with Cython and C++ standalone code generation. Learn to set targets, configure compilers, and use the cpp_standalone device."
+description: "Boost Brian2 simulation performance with Cython and C++ standalone code generation. Set targets, configure compilers, and use the cpp_standalone device."
 ---
 
 Brian2 supports several distinct computational backends that control how simulation work — numerical integration, synaptic propagation, threshold detection — is actually executed. The default **runtime** mode runs the simulation loop in Python while compiling the inner compute kernels to a faster target language automatically. For workloads where even that Python-level loop overhead matters, the **C++ standalone** mode generates a self-contained C++ project that is compiled and run entirely outside of Python, often delivering dramatic speed gains for smaller or highly connected networks.
@@ -44,6 +44,23 @@ Standalone mode generates a complete C++ project tree for your model, compiles i
 <Warning>
 Not all Brian features work in C++ standalone mode. Python-based `NetworkOperation` objects and some array-indexing syntax such as `S.w[0, :] = ...` will not function. Rewrite these using string-based syntax where possible. Standalone mode also only supports a **fixed** number of `run` calls — Python loops around multiple `run` calls will not produce the expected behaviour.
 </Warning>
+
+### Selecting and Querying the Device
+
+Use `set_device` to choose the computation backend, and `get_device` to retrieve the currently active device object:
+
+```python
+from brian2 import *
+
+# Switch to C++ standalone mode
+set_device('cpp_standalone')
+
+# Retrieve the active device (e.g. to call device-specific methods)
+dev = get_device()
+print(type(dev))  # <class 'brian2.devices.cpp_standalone.device.CPPStandaloneDevice'>
+```
+
+`set_device` accepts the device name as a string (`'cpp_standalone'` or `'runtime'`), plus optional keyword arguments that are forwarded to `Device.build`. `get_device` always returns the currently active `Device` object.
 
 ### Single `run` Call
 

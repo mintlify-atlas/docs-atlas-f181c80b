@@ -1,7 +1,7 @@
 ---
 title: "Physical Units in Brian2: Dimensional Analysis Made Easy"
 sidebarTitle: "Units"
-description: "Brian2's unit system enforces physical dimensions automatically. Learn how to use SI units, create quantities, and avoid dimensionality errors in neural simulations."
+description: "Brian2's unit system enforces physical dimensions automatically. Learn to use SI units, create quantities, and avoid dimensionality errors in simulations."
 ---
 
 Brian2 ships with a comprehensive physical units system that tracks dimensions throughout your simulation. Rather than working with raw floating-point numbers and hoping the scales are correct, every quantity you create carries its unit with it. Brian checks dimensional consistency at every operation and raises a clear error the moment something goes wrong — before it can silently corrupt your results. This makes it much easier to write correct neural simulations and to understand what each parameter represents.
@@ -43,7 +43,7 @@ On top of the base units, Brian2 defines a rich set of derived units:
 | `gram` / `gramme` | Mass (non-SI convenience) |
 | `liter` / `litre` | Volume |
 
-All derived units are additionally available with the standard SI prefixes `p` (pico), `n` (nano), `u` (micro), `m` (milli), `k` (kilo), `M` (mega), `G` (giga), and `T` (tera). This gives you values like `msiemens`, `ufarad`, `namp`, `kHz`, and so on.
+All derived units are additionally available with the standard SI prefixes `p` (pico), `n` (nano), `u` (micro), `m` (milli), `k` (kilo), `M` (mega), `G` (giga), and `T` (tera). This gives you values like `msiemens`, `ufarad`, `namp`, `kHz`, and so on. Two exceptions apply: `kilogram` is not defined with any additional prefixes (use `gram`/`gramme` as the base and apply prefixes to those), and `metre`/`meter` are additionally defined with the `centi` prefix (`cmetre`/`cmeter`).
 
 A handful of extra abbreviations are included for everyday convenience:
 

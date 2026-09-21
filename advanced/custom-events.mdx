@@ -1,7 +1,7 @@
 ---
-title: "Custom Events in Brian2 Beyond Spike Thresholds"
+title: "Custom Events Beyond Spike Thresholds in Brian2 Simulations"
 sidebarTitle: "Custom Events"
-description: "Define custom events in Brian2 for non-spike threshold crossings. Trigger synaptic pathways, monitors, and run_on_event actions from any neuron state variable."
+description: "Define custom events in Brian2 beyond spikes. Trigger synaptic pathways, EventMonitor recordings, and run_on_event code from any neuron state variable."
 ---
 
 In most Brian2 simulations, the `threshold` argument of `NeuronGroup` defines a single event — a **spike** — that drives synaptic transmission, monitors, and reset logic. But many biologically realistic models need to respond to other kinds of threshold crossings: an intracellular calcium concentration exceeding a threshold, a slow potassium current crossing zero, or any state variable hitting a critical value. Brian2's custom event system lets you define arbitrarily many named events on a `NeuronGroup`, each of which can independently trigger synaptic pathways, `EventMonitor` recordings, and groups of reset-like statements.

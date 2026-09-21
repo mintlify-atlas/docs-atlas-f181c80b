@@ -295,6 +295,8 @@ of the source group's clock.
 PopulationRateMonitor(
     source,
     name="ratemonitor*",
+    codeobj_class=None,
+    dtype=float64,
 )
 ```
 
@@ -304,6 +306,16 @@ PopulationRateMonitor(
 
 <ParamField path="name" type="str" default='"ratemonitor*"'>
   Unique name for this object.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class used to run the rate computation. Defaults to the
+  code generation target set by `set_device`.
+</ParamField>
+
+<ParamField path="dtype" type="dtype" default="float64">
+  NumPy data type used to store the recorded `rate` and `t` arrays.
+  Defaults to `numpy.float64`.
 </ParamField>
 
 ### Attributes

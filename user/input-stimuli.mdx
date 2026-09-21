@@ -196,7 +196,7 @@ G = NeuronGroup(N, 'dv/dt = -v / (10*ms) : 1',
 S_noise  = Synapses(noise,  G, on_pre='v += 0.05')
 S_signal = Synapses(signal, G, on_pre='v += 0.3')
 S_noise.connect(j='i')
-S_signal.connect(i=0, j='k for k in range(N)')
+S_signal.connect(j=np.arange(N))
 
 M = SpikeMonitor(G)
 run(300 * ms)

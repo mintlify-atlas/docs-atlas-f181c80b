@@ -1,7 +1,7 @@
 ---
 title: "Migrating from Brian1 to Brian2: Complete Upgrade Guide"
 sidebarTitle: "Brian1 Migration"
-description: "Migrate neural simulations from Brian1 to Brian2. Key changes include NeuronGroup equations, Synapses replacing Connection, and the new units/namespace system."
+description: "Migrate from Brian1 to Brian2. Key changes: NeuronGroup equations, Synapses replacing Connection, and the new units/namespace system."
 ---
 
 Brian2 is a complete rewrite of the Brian neural simulator that retains the same high-level modelling philosophy while fixing fundamental design limitations of Brian1. The most significant changes affect how neural models are expressed (string-based equations replace class-based ones), how synaptic connections are defined (`Synapses` replaces `Connection`), and how networks are managed (the magic network is cleaner and clock handling is simplified). Brian1 depends on Python 2.x and is no longer maintained; a Docker container image is provided at `docker.io/briansimulator/brian1.4.3` for running legacy code while you migrate.

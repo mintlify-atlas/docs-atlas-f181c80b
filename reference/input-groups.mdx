@@ -25,6 +25,7 @@ PoissonGroup(
     order=0,
     namespace=None,
     name="poissongroup*",
+    codeobj_class=None,
 )
 ```
 
@@ -63,6 +64,11 @@ PoissonGroup(
 
 <ParamField path="name" type="str" default='"poissongroup*"'>
   Unique name for this object.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class used to run the threshold check. Defaults to the
+  code generation target set by `set_device`.
 </ParamField>
 
 ### Attributes
@@ -196,6 +202,7 @@ SpikeGeneratorGroup(
     order=0,
     sorted=False,
     name="spikegeneratorgroup*",
+    codeobj_class=None,
 )
 ```
 
@@ -245,6 +252,11 @@ SpikeGeneratorGroup(
 
 <ParamField path="name" type="str" default='"spikegeneratorgroup*"'>
   Unique name for this object.
+</ParamField>
+
+<ParamField path="codeobj_class" type="class" optional>
+  The `CodeObject` class used to run spike emission. Defaults to the code
+  generation target set by `set_device`.
 </ParamField>
 
 ### Attributes
