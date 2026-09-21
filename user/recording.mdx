@@ -1,0 +1,335 @@
+---
+title: "Recording Simulation Data with Brian2 Monitors"
+sidebarTitle: "Recording"
+description: "Record spikes, state variables, and population firing rates in Brian2 simulations using SpikeMonitor, StateMonitor, and PopulationRateMonitor."
+---
+
+Brian2 provides three purpose-built monitor objects for capturing simulation data: `SpikeMonitor` records when and which neurons fire, `StateMonitor` tracks how state variables evolve over time, and `PopulationRateMonitor` measures the instantaneous population-averaged firing rate. All monitors are created before the run, added to the network automatically by the magic system (or explicitly to a `Network`), and their data is available as attributes immediately after `run()` returns.
+
+---
+
+## SpikeMonitor
+
+`SpikeMonitor` records every spike emitted by a `NeuronGroup` or any other spike source. Create it by passing the source group, then run the simulation.
+
+```python
+from brian2 import *
+
+N = 100
+G = NeuronGroup(N, 'dv/dt = (1 - v) / (10*ms) : 1',
+                threshold='v > 0.9', reset='v = 0')
+M = SpikeMonitor(G)
+run(200 * ms)
+```
+
+### Accessing spike data
+
+After the run, four key attributes are available:
+
+<CardGroup cols={2}>
+  <Card title="M.i and M.t" icon="bolt">
+    Arrays of neuron indices and corresponding spike times. If `M.i == [0, 2, 1]` and `M.t == [1*ms, 2*ms, 3*ms]`, neuron 0 fired at 1 ms, neuron 2 at 2 ms, neuron 1 at 3 ms.
+  </Card>
+  <Card title="M.count" icon="list-ol">
+    An array of length `N` giving the total number of spikes recorded from each neuron over the entire run.
+  </Card>
+  <Card title="M.num_spikes" icon="calculator">
+    The scalar total number of spikes recorded across all neurons.
+  </Card>
+  <Card title="M.spike_trains()" icon="diagram-project">
+    Returns a dictionary mapping each neuron index to an array of its spike times. Useful for per-neuron analyses.
+  </Card>
+</CardGroup>
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = (1 - v) / (10*ms) : 1',
+                threshold='v > 0.9', reset='v = 0')
+M = SpikeMonitor(G)
+run(500 * ms)
+
+# Raster plot
+import matplotlib.pyplot as plt
+plt.figure()
+plt.plot(M.t / ms, M.i, '.k', ms=2)
+plt.xlabel('Time (ms)')
+plt.ylabel('Neuron index')
+plt.title('Spike raster')
+plt.show()
+
+# Per-neuron spike trains
+trains = M.spike_trains()
+print('Neuron 0 spike times:', trains[0])
+print('Total spikes:', M.num_spikes)
+print('Spikes per neuron:', M.count[:])
+```
+
+<Tip>
+If you only need summary statistics (spike counts per neuron, total spike count) and not the individual spike times, set `record=False` when creating the `SpikeMonitor`. This avoids storing potentially large `i` and `t` arrays. `M.count` and `M.num_spikes` will still be populated correctly.
+</Tip>
+
+---
+
+## Recording variables at spike time
+
+By default, `SpikeMonitor` only records the neuron index and spike time. You can additionally record the value of any state variable at the moment of spiking by passing a `variables` argument. This is especially useful for models with adaptive or stochastic thresholds.
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'v : 1', threshold='rand() < 100*Hz*dt')
+G.run_regularly('v = rand()')
+M = SpikeMonitor(G, variables=['v'])
+run(100 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(M.t / ms, M.v, '.')
+plt.xlabel('Time (ms)')
+plt.ylabel('v at spike time')
+plt.show()
+```
+
+The `values(var)` method returns a dictionary mapping each neuron index to an array of the recorded variable's values sorted by spike time:
+
+```python
+from brian2 import *
+
+N = 20
+G = NeuronGroup(N,
+                '''dv/dt = (1 - v) / (10*ms) : 1
+                   v_th : 1''',
+                threshold='v > v_th',
+                reset='''v = 0
+                         v_th = clip(v_th + rand()*0.2 - 0.1, 0.1, 0.9)''')
+G.v_th = 0.5
+spike_mon = SpikeMonitor(G, variables='v')
+run(1 * second)
+
+v_values = spike_mon.values('v')
+print('Threshold crossings for neuron 0:', v_values[0])
+```
+
+---
+
+## StateMonitor
+
+`StateMonitor` records the value of one or more state variables at every time step (or at a reduced sampling rate) for a specified set of neuron indices. It is the main tool for tracking membrane potential traces, conductances, and other continuous quantities.
+
+### Basic usage
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = (1 - v) / (10*ms) : 1',
+                threshold='v > 0.9', reset='v = 0')
+# Record variable 'v' for all neurons
+M = StateMonitor(G, 'v', record=True)
+run(200 * ms)
+
+import matplotlib.pyplot as plt
+# Plot neuron 0
+plt.plot(M.t / ms, M.v[0])
+plt.xlabel('Time (ms)')
+plt.ylabel('v')
+plt.show()
+```
+
+The `record` argument controls which neurons are recorded:
+
+| `record` value | Effect |
+|---|---|
+| `True` | Record all neurons (warning: can use a lot of memory) |
+| `False` | Record no neurons (monitor exists but stores nothing) |
+| `[0, 10, 100]` | Record only neurons 0, 10, and 100 |
+
+### Recording multiple variables
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, '''dv/dt = (I - v) / (10*ms) : 1
+                         du/dt = -u / (100*ms) : 1
+                         I : 1''',
+                threshold='v > 1', reset='v = 0; u += 0.1')
+G.I = 1.2
+M = StateMonitor(G, ('v', 'u'), record=[0, 10, 100])
+run(500 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(M.t / ms, M.v[0], label='v, neuron 0')
+plt.plot(M.t / ms, M.u[0], label='u, neuron 0')
+plt.legend()
+plt.show()
+```
+
+### Indexing semantics
+
+There are two ways to access data for a specific neuron. Indexing the variable array directly uses a **relative** index into the list of recorded neurons, while indexing the monitor itself uses the **absolute** neuron index in the source group:
+
+```python
+# If M was created with record=[0, 10, 100]:
+M.v[0]    # Values for the 1st recorded neuron (neuron index 0 in the group)
+M.v[1]    # Values for the 2nd recorded neuron (neuron index 10 in the group)
+
+M[10].v   # Values for neuron 10 in the group (absolute index)
+M[0].v    # Values for neuron 0 in the group (absolute index)
+```
+
+To plot all recorded traces at once, transpose the 2D array:
+
+```python
+import matplotlib.pyplot as plt
+plt.plot(M.t / ms, M.v.T)  # shape is (n_recorded, n_times) → transpose to (n_times, n_recorded)
+plt.show()
+```
+
+### Reducing recording frequency
+
+For long simulations, recording every time step may be unnecessary. Use the `dt` argument to sample less frequently:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1')
+# Record every 1 ms even if defaultclock.dt is smaller
+M = StateMonitor(G, 'v', record=True, dt=1*ms)
+run(10 * second)
+```
+
+<Tip>
+Recording from many neurons over a long simulation can consume large amounts of memory. For 1000 neurons simulated for 100 seconds at `dt=0.1ms`, a single float64 variable occupies about 8 GB. Consider: recording only a subset with `record=[...]`, increasing the monitor's `dt`, or using the `get_states` / pickle pattern to flush data to disk periodically (see the source documentation on freeing memory).
+</Tip>
+
+---
+
+## PopulationRateMonitor
+
+`PopulationRateMonitor` records the instantaneous population-averaged firing rate at every time step. After the run, `.t` and `.rate` give the time and rate arrays respectively.
+
+```python
+from brian2 import *
+
+G = NeuronGroup(1000, 'dv/dt = (1 - v) / (10*ms) : 1',
+                threshold='v > 0.9', reset='v = 0')
+G.v = 'rand()'
+M = PopulationRateMonitor(G)
+run(500 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(M.t / ms, M.rate / Hz)
+plt.xlabel('Time (ms)')
+plt.ylabel('Rate (Hz)')
+plt.show()
+```
+
+### smooth_rate
+
+Because the instantaneous rate is noisy (only a fraction of neurons fire each time step), use `smooth_rate` for a cleaner signal. You can choose a `'gaussian'` (the default) or `'flat'` window, and specify the width:
+
+```python
+smoothed = M.smooth_rate(window='gaussian', width=10*ms)
+
+import matplotlib.pyplot as plt
+plt.plot(M.t / ms, smoothed / Hz)
+plt.xlabel('Time (ms)')
+plt.ylabel('Smoothed rate (Hz)')
+plt.show()
+```
+
+### binned_rate
+
+`binned_rate` averages the population rate into non-overlapping bins. It returns a tuple `(bins, binned_values)` where `bins` holds the start time of each bin:
+
+```python
+bins, rates = M.binned_rate(bin_size=10*ms)
+
+import matplotlib.pyplot as plt
+plt.bar(bins / ms, rates / Hz, width=10)
+plt.xlabel('Time (ms)')
+plt.ylabel('Mean rate (Hz)')
+plt.show()
+```
+
+---
+
+## EventMonitor for custom events
+
+`SpikeMonitor` is a specialisation of the more general `EventMonitor`, which can record any custom event defined on a `NeuronGroup`. This is useful when a group defines non-spike events (e.g., a threshold crossing for a sub-threshold variable) and you want to record them separately from spikes:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10,
+                '''dv/dt = -v / (10*ms) : 1
+                   to_record : boolean (constant)''',
+                threshold='v > 0.5', reset='v = 0',
+                events={'recorded_spike': 'v > 0.5 and to_record'})
+G.to_record = [True, False] * 5  # record only even-indexed neurons
+
+mon = EventMonitor(G, 'recorded_spike')
+run(200 * ms)
+
+print('Recorded events at times:', mon.t[:])
+print('From neurons:', mon.i[:])
+```
+
+---
+
+## Store and restore simulation state
+
+Brian2 allows you to snapshot the complete state of a simulation with `store()` and return to it later with `restore()`. This is the recommended way to run multiple trials from the same initial condition or to separate a training phase from a testing phase.
+
+### Single snapshot for repeated trials
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+G.v = 'rand()'
+spike_mon = SpikeMonitor(G)
+
+store()  # Snapshot the state before any run
+
+spike_counts = []
+for trial in range(5):
+    restore()          # Return to the initial state
+    run(200 * ms)
+    spike_counts.append(spike_mon.count[:].copy())
+
+print('Average spike counts across trials:', np.mean(spike_counts, axis=0))
+```
+
+### Named snapshots for train/test splits
+
+```python
+from brian2 import *
+
+G = NeuronGroup(50, '''dv/dt = -v / (10*ms) : 1
+                        I : 1''',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(G, G, 'w : 1', on_pre='v += w')
+S.connect('i != j')
+S.w = 0.01
+
+store('initialized')
+
+for trial in range(3):
+    restore('initialized')
+    # Training phase: run with plasticity
+    run(1 * second)
+    store('after_training')
+
+    # Test phase: run several times from trained state
+    for test in range(5):
+        restore('after_training')
+        G.I = np.random.rand(50)
+        test_mon = SpikeMonitor(G)
+        run(200 * ms)
+        print(f'Trial {trial}, test {test}: {test_mon.num_spikes} spikes')
+```
+
+<Tip>
+The state can also be stored to disk by passing a `filename` argument: `store('checkpoint', filename='sim_state.pkl')`. This lets you resume a long simulation in a later Python session without re-running the initialisation phase. Note that `restore` only restores variable values — you still need to construct all group, synapse, and monitor objects before calling `restore`.
+</Tip>

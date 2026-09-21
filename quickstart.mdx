@@ -1,47 +1,221 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Brian2: Build Your First Neural Network"
+sidebarTitle: "Quickstart"
+description: "Learn how to build and run your first spiking neural network with Brian2 in minutes. Covers neuron groups, synapses, monitors, and analyzing spike output."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+Brian2 makes it possible to go from a set of differential equations to a running spiking neural network simulation in just a few lines of Python. This guide walks you through the core workflow — defining neuron models as equations, recording spikes, and running and analysing a simulation — using concrete, runnable examples drawn directly from Brian2's tutorial and example library. By the end you will have simulated both a single neuron and a full recurrent network of 4000 neurons.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
+<Note>
+  Brian2 uses a **"magic" network** system: any `NeuronGroup`, `Synapses`, or `Monitor` object you create in the current scope is automatically included when you call `run()`. You do not need to construct a `Network` object explicitly for simple scripts. Call `start_scope()` at the start of each new simulation to clear previously created objects.
+</Note>
 
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Step-by-Step: Your First Neuron
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Import Brian2">
+    All Brian2 scripts begin with a wildcard import. This brings in all neuron group classes, monitors, units, and mathematical functions in one line:
 
-    ```bash
-    npm install your-package
+    ```python
+    from brian2 import *
+    ```
+
+    This also imports the physical units system (`mV`, `ms`, `nA`, etc.) and common math functions (`exp`, `sin`, `rand`, etc.) directly into the namespace.
+  </Step>
+
+  <Step title="Define a NeuronGroup">
+    Neurons in Brian2 are defined by differential equations written as a multi-line string. Each line has the form `d<variable>/dt = <expression> : <unit>`. Add `threshold`, `reset`, and optionally `refractory` arguments to make the neuron spike:
+
+    ```python
+    start_scope()
+
+    tau = 10*ms
+    eqs = '''
+    dv/dt = (1-v)/tau : 1 (unless refractory)
+    '''
+
+    G = NeuronGroup(1, eqs,
+                    threshold='v > 0.8',
+                    reset='v = 0',
+                    refractory=5*ms,
+                    method='exact')
+    ```
+
+    - `threshold='v > 0.8'` — fire a spike whenever this condition is true.
+    - `reset='v = 0'` — immediately execute this statement after a spike.
+    - `refractory=5*ms` — the neuron cannot spike again for 5 ms after firing.
+    - `(unless refractory)` — freeze the equation's variable during the refractory period.
+    - `method='exact'` — use the exact (analytical) integrator for this linear equation.
+  </Step>
+
+  <Step title="Add a SpikeMonitor">
+    A `SpikeMonitor` records the time and index of every spike fired by the group. Create one before calling `run()`:
+
+    ```python
+    spikemon = SpikeMonitor(G)
+    ```
+
+    To also record continuous state variables, use a `StateMonitor`:
+
+    ```python
+    statemon = StateMonitor(G, 'v', record=0)  # record neuron index 0
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
+  <Step title="Run the Simulation">
+    Call `run()` with a duration expressed in Brian2 units. The magic network system automatically discovers all objects created in the current scope:
+
+    ```python
+    run(50*ms)
     ```
-  </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
+    Brian2 will print an `INFO` message the first time you run a simulation confirming which numerical integration method was selected for each group.
+  </Step>
+
+  <Step title="Analyse the Results">
+    After the run, monitor data is available as NumPy arrays. `spikemon.t` holds spike times and `spikemon.i` holds the corresponding neuron indices:
+
+    ```python
+    print('Spike times:', spikemon.t[:])
+
+    # Plot membrane potential and spike times
+    plot(statemon.t/ms, statemon.v[0])
+    for t in spikemon.t:
+        axvline(t/ms, ls='--', c='C1', lw=3)
+    xlabel('Time (ms)')
+    ylabel('v')
+    show()
     ```
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## Complete Example: CUBA Network
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+The Current-Based (CUBA) benchmark is a standard test network from the spiking neural network simulation literature. It consists of 4000 leaky integrate-and-fire neurons (3200 excitatory, 800 inhibitory) connected at random with 2% probability. Excitatory and inhibitory inputs are modelled as exponentially decaying synaptic currents.
+
+This example is taken directly from `examples/CUBA.py` in the Brian2 repository:
+
+```python
+from brian2 import *
+
+# Time constants and reversal potentials
+taum = 20*ms
+taue = 5*ms
+taui = 10*ms
+Vt = -50*mV
+Vr = -60*mV
+El = -49*mV
+
+# Neuron model: LIF with exponential synaptic currents
+eqs = '''
+dv/dt  = (ge+gi-(v-El))/taum : volt (unless refractory)
+dge/dt = -ge/taue : volt
+dgi/dt = -gi/taui : volt
+'''
+
+# Create the neuron population
+P = NeuronGroup(4000, eqs, threshold='v>Vt', reset='v = Vr',
+                refractory=5*ms, method='exact')
+
+# Randomise initial membrane potentials
+P.v  = 'Vr + rand() * (Vt - Vr)'
+P.ge = 0*mV
+P.gi = 0*mV
+
+# Synaptic weights
+we = (60*0.27/10)*mV   # excitatory synaptic weight (voltage units)
+wi = (-20*4.5/10)*mV   # inhibitory synaptic weight
+
+# Create synapses: first 3200 neurons are excitatory, rest inhibitory
+Ce = Synapses(P, P, on_pre='ge += we')
+Ci = Synapses(P, P, on_pre='gi += wi')
+Ce.connect('i<3200', p=0.02)
+Ci.connect('i>=3200', p=0.02)
+
+# Record spikes
+s_mon = SpikeMonitor(P)
+
+# Run for 1 second
+run(1 * second)
+
+# Raster plot
+plot(s_mon.t/ms, s_mon.i, ',k')
+xlabel('Time (ms)')
+ylabel('Neuron index')
+show()
+```
+
+### What Each Part Does
+
+**Neuron equations** — each neuron has three state variables:
+- `v` — the membrane potential, driven towards the leak reversal `El` with time constant `taum`.
+- `ge` — the excitatory synaptic conductance (in voltage units), decaying with `taue`.
+- `gi` — the inhibitory synaptic conductance (in voltage units), decaying with `taui`.
+
+The `(unless refractory)` flag on `v` holds the membrane potential fixed during the 5 ms refractory period after each spike.
+
+**Random initialisation** — `P.v = 'Vr + rand() * (Vt - Vr)'` uses Brian2's string-based initialisation to assign each neuron a different random starting potential drawn uniformly between the reset voltage `Vr` and the threshold `Vt`. This prevents all neurons from firing simultaneously at the start of the simulation.
+
+**Synapses** — `Ce.connect('i<3200', p=0.02)` connects each of the first 3200 neurons (excitatory) to any neuron in the full population with 2% probability. `Ci` does the same for the remaining 800 inhibitory neurons. When a pre-synaptic spike arrives, `on_pre='ge += we'` (or `gi += wi`) instantaneously increments the target neuron's synaptic variable.
+
+**SpikeMonitor** — after `run()`, `s_mon.t` is an array of all spike times and `s_mon.i` is an array of the corresponding neuron indices. Plotting `s_mon.i` against `s_mon.t` produces a standard raster plot showing the network's asynchronous irregular firing regime.
+
+<Tip>
+  Pass `report='text'` to `run()` to print a live progress report to the terminal during long simulations:
+
+  ```python
+  run(1 * second, report='text')
+  ```
 </Tip>
+
+## Multiple Neurons with Per-Neuron Parameters
+
+Brian2 supports **per-neuron parameters** — variables that are part of the equation string but have no differential equation of their own. Declare them with `<name> : <unit>` and initialise them with a string expression that can reference the neuron index `i`:
+
+```python
+start_scope()
+
+N = 100
+tau = 10*ms
+v0_max = 3.
+duration = 1000*ms
+
+eqs = '''
+dv/dt = (v0-v)/tau : 1 (unless refractory)
+v0 : 1
+'''
+
+G = NeuronGroup(N, eqs, threshold='v>1', reset='v=0',
+                refractory=5*ms, method='exact')
+
+# Give each neuron a linearly spaced drive parameter
+G.v0 = 'i*v0_max/(N-1)'
+
+M = SpikeMonitor(G)
+run(duration)
+
+# Plot firing rate vs drive parameter (I-f curve)
+plot(G.v0, M.count/duration)
+xlabel('v0')
+ylabel('Firing rate (sp/s)')
+show()
+```
+
+`M.count` is a NumPy array containing the total number of spikes fired by each neuron during the run. Dividing by `duration` gives the mean firing rate.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Neuron Models" icon="dna">
+    Learn how to write arbitrary differential equations for your neurons, including Hodgkin–Huxley conductance models, adaptive threshold models, and stochastic neurons with noise term `xi`.
+  </Card>
+  <Card title="Synapses & Plasticity" icon="arrows-left-right">
+    Connect neuron groups with distance-dependent connectivity, multiple synapse types, and spike-timing-dependent plasticity (STDP) rules expressed as differential equations.
+  </Card>
+  <Card title="Recording & Analysis" icon="chart-line">
+    Use `StateMonitor`, `SpikeMonitor`, `PopulationRateMonitor`, and `EventMonitor` to capture simulation data, then analyse it with NumPy and SciPy or visualise with Matplotlib.
+  </Card>
+  <Card title="Performance & Code Generation" icon="bolt">
+    Switch to the standalone C++ backend for large-scale or parameter-sweep simulations. Understand how Brian2's Cython, numpy, and C++ standalone modes differ in speed and use case.
+  </Card>
+</CardGroup>

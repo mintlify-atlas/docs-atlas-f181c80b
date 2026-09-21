@@ -1,0 +1,413 @@
+---
+title: "Input Group API Reference — PoissonGroup, SpikeGeneratorGroup, TimedArray"
+sidebarTitle: "Input Groups"
+description: "API reference for Brian2 input classes: PoissonGroup for Poisson spike trains, SpikeGeneratorGroup for explicit spike lists, PoissonInput and TimedArray."
+---
+
+Brian2 provides several dedicated input classes that generate or inject stimuli into a network without requiring a full `NeuronGroup` model. `PoissonGroup` produces independent Poisson-distributed spike trains at a specified firing rate. `SpikeGeneratorGroup` replays an explicit list of neuron-index / spike-time pairs, which is useful for driving simulations with pre-recorded or analytically defined spike patterns. `PoissonInput` is an efficient shortcut for adding many independent Poisson synapses directly to a target variable without constructing an intermediate group. `TimedArray` turns a NumPy array into a time-indexed lookup function that can be referenced inside equation strings, enabling arbitrary time-varying inputs.
+
+---
+
+## PoissonGroup
+
+A spike source that generates independent Poisson spike trains. Each neuron
+fires at the specified rate, independently of all others.
+
+### Constructor
+
+```python
+PoissonGroup(
+    N,
+    rates,
+    dt=None,
+    clock=None,
+    when="thresholds",
+    order=0,
+    namespace=None,
+    name="poissongroup*",
+)
+```
+
+<ParamField path="N" type="int" required>
+  Number of independent Poisson neurons. Must be a positive integer (≥ 1).
+</ParamField>
+
+<ParamField path="rates" type="Quantity | str" required>
+  Firing rate(s) in Hz. Accepted forms:
+  - A scalar `Quantity` (same rate for all neurons), e.g. `50*Hz`.
+  - An array-like `Quantity` of length `N` (individual rates per neuron).
+  - A string expression evaluated at every time step (can reference `t`,
+    `dt`, `i`, or a `TimedArray`), e.g. `'50*Hz + 10*Hz*sin(2*pi*t/100*ms)'`.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Simulation time step. Mutually exclusive with `clock`. Defaults to
+  `defaultclock.dt`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  Explicit clock object. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="when" type="str" default='"thresholds"'>
+  Scheduling slot in which spike generation occurs.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Scheduling priority within the slot.
+</ParamField>
+
+<ParamField path="namespace" type="dict" optional>
+  Namespace for resolving identifiers in a string `rates` expression.
+</ParamField>
+
+<ParamField path="name" type="str" default='"poissongroup*"'>
+  Unique name for this object.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `N` | `int` | Number of neurons. |
+| `rates` | `Quantity` or `Subexpression` | The firing rates. Writable if rates were given as an array. |
+| `t` | `Quantity` | Current simulation time. |
+| `i` | `ndarray` | Neuron indices `[0, 1, …, N-1]`. |
+
+### Example
+
+```python
+from brian2 import *
+
+# Constant rates
+P = PoissonGroup(100, rates=50 * Hz)
+
+# Variable rates per neuron
+P = PoissonGroup(100, rates=np.linspace(10, 100, 100) * Hz)
+
+# Time-varying rates using a string expression
+P = PoissonGroup(100, rates="50*Hz*(1 + sin(2*pi*t/(100*ms)))/2")
+
+mon = SpikeMonitor(P)
+run(500 * ms)
+print(f"Mean rate: {mon.num_spikes / (100 * 500e-3):.1f} Hz")
+```
+
+---
+
+## PoissonInput
+
+Efficiently adds `N` independent Poisson-distributed synaptic inputs to a
+single target variable of a `Group`. All inputs share the same rate and weight.
+This is far more memory-efficient than creating a full `PoissonGroup` and
+`Synapses` object when many identical inputs are needed.
+
+### Constructor
+
+```python
+PoissonInput(
+    target,
+    target_var,
+    N,
+    rate,
+    weight,
+    when="synapses",
+    order=0,
+)
+```
+
+<ParamField path="target" type="Group" required>
+  The target group that receives the Poisson input (typically a `NeuronGroup`).
+</ParamField>
+
+<ParamField path="target_var" type="str" required>
+  The name of the variable in `target` to which the weight is added on each
+  input event. The units of `weight` must match those of this variable.
+</ParamField>
+
+<ParamField path="N" type="int" required>
+  Number of independent Poisson input channels. The effective synaptic drive
+  scales with `N`.
+</ParamField>
+
+<ParamField path="rate" type="Quantity" required>
+  Firing rate of each individual input channel (in Hz).
+</ParamField>
+
+<ParamField path="weight" type="str | Quantity" required>
+  The amount added to `target_var` for each input event. Either a `Quantity`
+  (whose dimensions must match `target_var`) or a string expression that is
+  evaluated in the context of `target`.
+</ParamField>
+
+<ParamField path="when" type="str" default='"synapses"'>
+  Scheduling slot for the weight updates.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Scheduling priority.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `N` | `int` | Number of input channels (read-only). |
+| `rate` | `Quantity` | Input rate per channel (read-only). |
+| `target_var` | `str` | Name of the targeted variable (read-only). |
+| `weight` | `str | Quantity` | The synaptic weight as supplied at construction (read-only). |
+
+### Example
+
+```python
+from brian2 import *
+
+eqs = "dv/dt = -v/(10*ms) : volt"
+G = NeuronGroup(100, eqs, threshold="v > -50*mV", reset="v = -70*mV")
+G.v = -65 * mV
+
+# 1000 inputs at 10 Hz each, each adding 0.1 mV
+P_input = PoissonInput(G, "v", N=1000, rate=10 * Hz, weight=0.1 * mV)
+
+mon = SpikeMonitor(G)
+run(1 * second)
+print(f"Mean firing rate: {mon.num_spikes / (100 * 1.0):.1f} Hz")
+```
+
+---
+
+## SpikeGeneratorGroup
+
+Emits spikes at precisely specified times for the given neuron indices. The
+spike list is loaded upfront from `indices` and `times` arrays. An optional
+`period` parameter makes the pattern repeat.
+
+### Constructor
+
+```python
+SpikeGeneratorGroup(
+    N,
+    indices,
+    times,
+    dt=None,
+    clock=None,
+    period=0 * second,
+    when="thresholds",
+    order=0,
+    sorted=False,
+    name="spikegeneratorgroup*",
+)
+```
+
+<ParamField path="N" type="int" required>
+  The number of virtual neurons. Indices in `indices` must lie in
+  `[0, N-1]`.
+</ParamField>
+
+<ParamField path="indices" type="array-like of int" required>
+  Neuron indices for each spike. Must have the same length as `times`.
+  Values must be in `[0, N-1]`.
+</ParamField>
+
+<ParamField path="times" type="Quantity" required>
+  Spike times as a `Quantity` (in units of time). Must have the same length
+  as `indices`. Values must be non-negative. Within a given `dt` window, each
+  neuron may spike at most once.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Simulation time step. Mutually exclusive with `clock`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  Explicit clock. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="period" type="Quantity" default="0*second">
+  If non-zero, the spike pattern repeats with this period. The period must be
+  greater than the maximum spike time, and must be an integer multiple of `dt`.
+  A period of `0*second` means no repetition.
+</ParamField>
+
+<ParamField path="when" type="str" default='"thresholds"'>
+  Scheduling slot for spike emission.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Scheduling priority.
+</ParamField>
+
+<ParamField path="sorted" type="bool" default="False">
+  Set to `True` if `indices` and `times` are already sorted first by time then
+  by index. Avoids an extra sort and copy at construction — beneficial for very
+  large spike lists.
+</ParamField>
+
+<ParamField path="name" type="str" default='"spikegeneratorgroup*"'>
+  Unique name for this object.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `N` | `int` | Number of virtual neurons. |
+| `t` | `Quantity` | Current simulation time. |
+
+### Methods
+
+#### `set_spikes(indices, times, period=0*second, sorted=False)`
+
+Replace the current spike list with a new one. Useful for changing the input
+pattern between successive simulation runs.
+
+```python
+gen.set_spikes(new_indices, new_times)
+```
+
+<ParamField path="indices" type="array-like of int" required>
+  New pre-synaptic indices.
+</ParamField>
+
+<ParamField path="times" type="Quantity" required>
+  New spike times. Must have the same length as `indices`.
+</ParamField>
+
+<ParamField path="period" type="Quantity" default="0*second">
+  New repetition period (`0*second` = no repetition).
+</ParamField>
+
+<ParamField path="sorted" type="bool" default="False">
+  Whether the new arrays are already sorted.
+</ParamField>
+
+### Example
+
+```python
+from brian2 import *
+
+# Fire each neuron once at t = i ms
+indices = np.arange(5)
+times   = np.arange(5) * ms
+
+gen = SpikeGeneratorGroup(5, indices, times)
+mon = SpikeMonitor(gen)
+run(6 * ms)
+print(mon.i[:], mon.t[:])
+
+# Repeat the pattern every 10 ms
+gen2 = SpikeGeneratorGroup(5, indices, times, period=10 * ms)
+mon2 = SpikeMonitor(gen2)
+run(25 * ms)
+print(mon2.num_spikes)  # 3 repeats × 5 neurons = 15
+
+# Change the spike list for a second run
+gen.set_spikes([0, 1], [1.5, 3.0] * ms)
+```
+
+---
+
+## TimedArray
+
+Creates a time-varying function from a NumPy array. Once constructed, the
+object is used inside equation strings or threshold/reset conditions by calling
+it as a function of time (1-D arrays) or of time and a neuron index (2-D
+arrays). Lookup is performed using nearest-integer rounding; values outside the
+array range return the first or last element respectively.
+
+### Constructor
+
+```python
+TimedArray(values, dt, name=None)
+```
+
+<ParamField path="values" type="ndarray | Quantity" required>
+  Array of values. Accepted shapes:
+  - **1-D** `(n_timesteps,)` — a single time series shared by all neurons.
+    Used as `ta(t)` in equations.
+  - **2-D** `(n_timesteps, n_columns)` — different time series per column
+    index. Used as `ta(t, i)` in equations, where `i` is an integer index
+    selecting the column. Out-of-range column indices return `NaN`.
+
+  A `Quantity` array preserves units; a plain `ndarray` is treated as
+  dimensionless.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" required>
+  The time spacing between consecutive values in the array (in units of
+  time). Does not need to match the simulation `dt`.
+</ParamField>
+
+<ParamField path="name" type="str" optional>
+  Unique name for the function object. Defaults to an auto-generated name
+  starting with `_timedarray`.
+</ParamField>
+
+### Usage in equations
+
+The `TimedArray` object must be present in the namespace when the simulation
+runs, either by being in scope (magic interface) or by being passed in the
+`namespace` argument of `Network.run` / `run`.
+
+```python
+# 1-D usage
+ta = TimedArray([1, 2, 3, 4] * mV, dt=0.1 * ms)
+G = NeuronGroup(1, "v = ta(t) : volt")
+
+# 2-D usage — column index selects the per-neuron trace
+ta2d = TimedArray([[1, 2], [3, 4], [5, 6]] * mV, dt=0.1 * ms)
+G = NeuronGroup(4, "v = ta2d(t, i % 2) : volt")
+```
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `values` | `ndarray` | The stored value array (float64, without units). |
+| `dt` | `float` | The time spacing in seconds (stored as a plain float). |
+| `dim` | `Dimension` | Physical dimensions of the values. |
+
+### Example
+
+```python
+from brian2 import *
+import numpy as np
+
+# 1-D: a sinusoidal current
+t_values = np.arange(0, 200, 0.1) * ms
+I_values = (1 + 0.5 * np.sin(2 * np.pi * t_values / (20 * ms))) * nA
+ta = TimedArray(I_values, dt=0.1 * ms)
+
+eqs = """
+dv/dt = (-v + R*I_ext) / tau : volt
+I_ext = ta(t) : amp
+"""
+G = NeuronGroup(1, eqs,
+                threshold="v > -50*mV",
+                reset="v = -70*mV",
+                namespace={"R": 100 * Mohm, "tau": 10 * ms},
+                method="euler")
+G.v = -65 * mV
+
+mon = StateMonitor(G, "v", record=True)
+run(200 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(mon.t / ms, mon.v[0] / mV)
+plt.xlabel("Time (ms)")
+plt.ylabel("Membrane potential (mV)")
+plt.show()
+
+# 2-D: per-neuron sinusoids with different frequencies
+freqs = np.array([10, 20, 40, 80]) * Hz
+n_steps = 1000
+t_arr = np.arange(n_steps) * 0.1e-3   # seconds
+values_2d = np.column_stack([
+    np.sin(2 * np.pi * f * t_arr) for f in freqs / Hz
+]) * mV
+ta2d = TimedArray(values_2d, dt=0.1 * ms)
+
+G2 = NeuronGroup(4, "v = ta2d(t, i) : volt")
+mon2 = StateMonitor(G2, "v", record=True)
+run(100 * ms)
+```

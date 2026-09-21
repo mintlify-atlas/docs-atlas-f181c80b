@@ -1,0 +1,205 @@
+---
+title: "Input Stimuli in Brian2: Poisson Groups and Spike Generators"
+sidebarTitle: "Input Stimuli"
+description: "Provide external input to Brian2 simulations using PoissonGroup, PoissonInput, SpikeGeneratorGroup, and TimedArray for time-varying rates and patterns."
+---
+
+Brian2 provides several complementary mechanisms for driving neural simulations with external input. Whether you need statistically generated spike trains, a fixed sequence of spikes at known times, or a continuously varying current defined by an array of values, there is a purpose-built object for each case. Choosing the right tool depends on how much detail you need about the individual generated spikes and how the input rate varies over time.
+
+## PoissonGroup
+
+`PoissonGroup` generates spikes according to a Poisson point process. Each neuron in the group fires independently at a specified rate. The group behaves exactly like a `NeuronGroup` from the perspective of downstream synapses, so you connect it to other groups with a `Synapses` object in the usual way.
+
+### Constant and array rates
+
+Pass a single rate to give all neurons the same firing rate, or pass an array of length `N` to give each neuron its own rate:
+
+```python
+from brian2 import *
+
+# Each of 100 neurons has a unique rate from 10 Hz to 109 Hz
+P = PoissonGroup(100, np.arange(100) * Hz + 10 * Hz)
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(P, G, on_pre='v += 0.1')
+S.connect(j='i')
+run(500 * ms)
+```
+
+### Time-varying (inhomogeneous) rates
+
+When `rates` is a string expression, Brian2 evaluates it at every time step, enabling time-dependent (inhomogeneous) Poisson processes. The expression may reference `t` and any `TimedArray` objects in scope:
+
+```python
+from brian2 import *
+
+# Five 100ms blocks of 100 Hz stimulation, followed by 100ms silence — repeated
+stimulus = TimedArray(np.tile([100., 0.], 5) * Hz, dt=100. * ms)
+P = PoissonGroup(1, rates='stimulus(t)')
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(P, G, on_pre='v += 0.2')
+S.connect()
+run(1 * second)
+```
+
+<Note>
+`PoissonGroup` uses the approximation `rand() < rates * dt` at each time step, which breaks down when `rates * dt` approaches 1 (i.e., more than one spike might fall in a single time step). If you need very high rates, distribute them across multiple neurons. For example, use `PoissonGroup(10, 1000*Hz)` instead of `PoissonGroup(1, 10000*Hz)`.
+</Note>
+
+---
+
+## PoissonInput
+
+When the individually generated spikes do not need to be tracked and only their aggregate impact on the target neuron matters, `PoissonInput` is a more efficient alternative. Instead of generating spike objects, it directly updates a target variable each time step by drawing from a binomial (or Gaussian-approximated) distribution representing the sum of `N` independent Poisson inputs.
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+
+# 100 Poisson inputs at 100 Hz each, each contributing weight 0.1 to v
+P = PoissonInput(G, 'v', 100, 100 * Hz, weight=0.1)
+
+run(500 * ms)
+```
+
+Each neuron in `G` receives independent realizations of the Poisson spike trains. The `PoissonInput` constructor takes: the target group, the name of the variable to update, the number of independent inputs `N`, the constant rate, and a `weight` specifying how much each input event increments the target variable.
+
+<Note>
+`PoissonInput` only supports a **constant** rate shared by all neurons. If you need different rates per neuron, create several `PoissonInput` objects targeting different subgroups, or use a full `PoissonGroup` with a rate array instead.
+</Note>
+
+---
+
+## SpikeGeneratorGroup
+
+`SpikeGeneratorGroup` fires explicit, user-defined spikes. You supply three pieces of information: `N` (number of neurons in the group), `indices` (an array of neuron indices), and `times` (a matching array of spike times). The group then fires the specified neuron at the specified time.
+
+```python
+from brian2 import *
+
+indices = array([0, 2, 1])
+times   = array([1, 2, 3]) * ms
+G = SpikeGeneratorGroup(3, indices, times)
+
+target = NeuronGroup(3, 'dv/dt = -v / (10*ms) : 1',
+                     threshold='v > 1', reset='v = 0')
+S = Synapses(G, target, on_pre='v += 0.5')
+S.connect(j='i')
+
+M = SpikeMonitor(G)
+run(5 * ms)
+print(M.t[:])
+```
+
+### Changing spikes between runs with `set_spikes`
+
+The spike schedule can be updated between runs using the `set_spikes` method. This is useful for running multiple trials with different input patterns, or for replaying the recorded output of another group back as input:
+
+```python
+from brian2 import *
+
+N = 20
+# Initial spike schedule
+indices = array([0, 5, 10])
+times   = array([1, 2, 3]) * ms
+
+inp = SpikeGeneratorGroup(N, indices, times)
+G   = NeuronGroup(N, 'dv/dt = -v / (10*ms) : 1',
+                  threshold='v > 1', reset='v = 0')
+feedforward = Synapses(inp, G, on_pre='v += 0.5')
+feedforward.connect(j='i')
+recurrent   = Synapses(G, G, on_pre='v += 0.1')
+recurrent.connect('i != j')
+spike_mon   = SpikeMonitor(G)
+
+runtime = 100 * ms
+run(runtime)
+
+# Replay the recorded output of G as new input in the next trial
+inp.set_spikes(spike_mon.i, spike_mon.t + runtime)
+run(runtime)
+```
+
+---
+
+## TimedArray
+
+`TimedArray` lets you describe a time-varying input as an explicit array of values sampled at regular intervals determined by the `dt` parameter. Inside neuron (or synapse) equations, you call it as a function of time: `stimulus(t)`.
+
+### 1D TimedArray — same value for all neurons
+
+For a stimulus that applies uniformly to all neurons, pass a 1D array. The value `x[k]` is used for all times in the interval `[k*dt, (k+1)*dt)`:
+
+```python
+from brian2 import *
+
+# Alternating 30ms blocks of random current strength and 20ms silence
+stimulus = TimedArray(
+    np.hstack([[c, c, c, 0, 0] for c in np.random.rand(1000)]),
+    dt=10 * ms
+)
+
+G = NeuronGroup(100,
+                'dv/dt = (-v + stimulus(t)) / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+G.v = '0.5 * rand()'
+run(5 * second)
+```
+
+### 2D TimedArray — per-neuron values
+
+When the array is 2D, the first axis is time and the second axis is a neuron/synapse index. Pass the index expression as the second argument to the function call in the equations:
+
+```python
+from brian2 import *
+
+runtime  = 1 * second
+# Two independent noise streams; even neurons get stream 0, odd neurons get stream 1
+stimulus = TimedArray(
+    np.random.rand(int(runtime / defaultclock.dt), 2),
+    dt=defaultclock.dt
+)
+
+G = NeuronGroup(100,
+                'dv/dt = (-v + stimulus(t, i % 2)) / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+run(runtime)
+```
+
+---
+
+## Combining inputs with synapses
+
+The input types above can be combined freely. The example below connects a `PoissonGroup` and a `SpikeGeneratorGroup` to the same target population, demonstrating how background Poisson noise and a precisely timed signal can coexist:
+
+```python
+from brian2 import *
+
+N = 50
+
+# Background Poisson noise
+noise = PoissonGroup(N, rates=10 * Hz)
+
+# Precisely timed signal spikes
+sig_indices = np.zeros(N, dtype=int)           # all from "neuron 0"
+sig_times   = np.arange(1, N + 1) * 5 * ms    # spread over time
+signal = SpikeGeneratorGroup(1, sig_indices, sig_times)
+
+# Target population
+G = NeuronGroup(N, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+
+# Connect both inputs
+S_noise  = Synapses(noise,  G, on_pre='v += 0.05')
+S_signal = Synapses(signal, G, on_pre='v += 0.3')
+S_noise.connect(j='i')
+S_signal.connect(i=0, j='k for k in range(N)')
+
+M = SpikeMonitor(G)
+run(300 * ms)
+
+print('Total spikes in G:', M.num_spikes)
+```

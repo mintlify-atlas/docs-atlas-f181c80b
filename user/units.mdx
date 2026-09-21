@@ -1,0 +1,262 @@
+---
+title: "Physical Units in Brian2: Dimensional Analysis Made Easy"
+sidebarTitle: "Units"
+description: "Brian2's unit system enforces physical dimensions automatically. Learn how to use SI units, create quantities, and avoid dimensionality errors in neural simulations."
+---
+
+Brian2 ships with a comprehensive physical units system that tracks dimensions throughout your simulation. Rather than working with raw floating-point numbers and hoping the scales are correct, every quantity you create carries its unit with it. Brian checks dimensional consistency at every operation and raises a clear error the moment something goes wrong — before it can silently corrupt your results. This makes it much easier to write correct neural simulations and to understand what each parameter represents.
+
+## Base Units
+
+The foundation of Brian2's unit system is the seven SI base units. Each is available by its full name and, where standard, by common abbreviations:
+
+| Name | Brian2 identifier(s) |
+|------|----------------------|
+| Ampere | `amp`, `ampere` |
+| Kilogram | `kilogram`, `kilogramme` |
+| Second | `second` |
+| Metre | `metre`, `meter` |
+| Mole | `mole`, `mol` |
+| Kelvin | `kelvin` |
+| Candela | `candela` |
+
+<Note>
+No single-letter abbreviations are provided to avoid clashes with common variable names. You can use `mV` or `nS`, but **not** `V` or `S`.
+</Note>
+
+## Derived Units and Prefixes
+
+On top of the base units, Brian2 defines a rich set of derived units:
+
+| Unit | Quantity |
+|------|----------|
+| `volt` | Electric potential |
+| `siemens` | Electrical conductance |
+| `farad` | Capacitance |
+| `hertz` | Frequency |
+| `coulomb` | Electric charge |
+| `ohm` | Resistance |
+| `joule` | Energy |
+| `pascal` | Pressure |
+| `watt` | Power |
+| `molar` | Molar concentration |
+| `gram` / `gramme` | Mass (non-SI convenience) |
+| `liter` / `litre` | Volume |
+
+All derived units are additionally available with the standard SI prefixes `p` (pico), `n` (nano), `u` (micro), `m` (milli), `k` (kilo), `M` (mega), `G` (giga), and `T` (tera). This gives you values like `msiemens`, `ufarad`, `namp`, `kHz`, and so on.
+
+A handful of extra abbreviations are included for everyday convenience:
+
+| Abbreviation | Equivalent |
+|--------------|-----------|
+| `ms` | `msecond` |
+| `mV` | `mvolt` |
+| `nS` | `nsiemens` |
+| `Hz` | `hertz` |
+| `cm` | `cmetre` / `cmeter` |
+| `mM` | `mmolar` |
+
+<Warning>
+`molar` (1 M = 10³ mol/m³) and `mmolar` (1 mM = 1 mol/m³) differ by a factor of 1000. When writing equations, the base unit for molar concentration is `mmolar` — **not** `molar`. Declaring a variable as `: molar` will give wrong results in practice.
+</Warning>
+
+## Using Units in Practice
+
+Create a physical quantity by multiplying a numeric value (scalar or array) by its unit:
+
+```python
+from brian2 import *
+
+tau = 20 * ms
+print(tau)          # 20. ms
+
+rates = [10, 20, 30] * Hz
+print(rates)        # [ 10.  20.  30.] Hz
+
+C_m = 200 * pfarad
+g_L = 10 * nsiemens
+E_L = -70 * mV
+```
+
+Arithmetic between quantities works naturally as long as the dimensions are compatible:
+
+```python
+# Time constant from capacitance and conductance
+tau_mem = C_m / g_L
+print(tau_mem)      # 20. ms
+
+# Weighted sum of voltages
+v_mix = 0.5 * (-65 * mV) + 0.5 * (-55 * mV)
+print(v_mix)        # -60. mV
+```
+
+Units are also understood inside `NeuronGroup` equation strings and in threshold / reset expressions, so you can freely reference them by name:
+
+```python
+tau = 10 * ms
+G = NeuronGroup(10, 'dv/dt = -v / tau : volt',
+                threshold='v > -50*mV',
+                reset='v = -70*mV')
+```
+
+## Unit Checking and Dimension Errors
+
+Brian2 raises a `DimensionMismatchError` any time you try to combine quantities whose dimensions are incompatible:
+
+```python
+tau = 20 * ms
+
+# Adding a dimensionless 1 to a time quantity → error
+tau += 1
+# DimensionMismatchError: Cannot calculate ... += 1,
+# units do not match (units are second and 1).
+
+# Adding mass to current → error
+3 * kgram + 3 * amp
+# DimensionMismatchError: Cannot calculate 3. kg + 3. A,
+# units do not match (units are kilogram and amp).
+```
+
+Brian functions also check units on their arguments:
+
+```python
+# Forgetting the unit on dt
+G = NeuronGroup(10, 'dv/dt = -v/tau: volt', dt=0.5)
+# DimensionMismatchError: Function "__init__" expected a quantity
+# with unit second for argument "dt" but got 0.5 (unit is 1).
+```
+
+These checks catch many common modelling mistakes — wrong scale factors, missing unit conversions, or swapped arguments — at construction time rather than silently producing biologically implausible results.
+
+## NumPy Functions with Units
+
+Brian2 overloads the standard NumPy functions so that they preserve units:
+
+```python
+rates = [10, 20, 30] * Hz
+
+print(mean(rates))      # 20. Hz
+print(rates.repeat(2))  # [ 10.  10.  20.  20.  30.  30.] Hz
+
+v = np.array([-70, -65, -60]) * mV
+print(np.max(v))        # -60. mV
+print(np.std(v))        #   5. mV
+```
+
+## Removing Units for Output
+
+When interfacing with analysis tools that do not understand Brian2 quantities, you will need to strip the units. There are three approaches:
+
+<Tabs>
+  <Tab title="Divide by unit (recommended)">
+    ```python
+    tau = 20 * ms
+
+    # Divide by the expected unit — makes the scale explicit
+    tau_val = tau / ms      # 20.0  (a plain float)
+    rates_val = rates / Hz  # array([10., 20., 30.])
+    ```
+  </Tab>
+  <Tab title="asarray / array">
+    ```python
+    rates = [10, 20, 30] * Hz
+
+    # Returns a plain numpy array in SI base units (Hz = s⁻¹ here)
+    raw = asarray(rates)   # array([ 10.,  20.,  30.])
+    raw = array(rates)     # same, but copies the data
+    ```
+  </Tab>
+  <Tab title="Underscore suffix">
+    ```python
+    G = NeuronGroup(5, 'dv/dt = -v/tau : volt')
+
+    # Access the raw values of a state variable directly
+    print(G.v_[:])   # [ 0.  0.  0.  0.  0.]
+    ```
+  </Tab>
+</Tabs>
+
+<Tip>
+Dividing by the unit (e.g. `tau / ms`) is the clearest approach because it documents the scale at the point of use. Someone reading your analysis code immediately knows the values are in milliseconds without having to trace back to the variable declaration.
+</Tip>
+
+## Temperatures
+
+Brian2 only supports temperatures in Kelvin via the `kelvin` unit. Celsius and Fahrenheit cannot be represented as multiplicative scalings of the SI base unit because they have a different zero point.
+
+For **temperature differences** (e.g. Q10 corrections), you can use `kelvin` directly since a 1 K difference equals a 1 °C difference.
+
+For **absolute temperatures** you need to add the offset explicitly using `zero_celsius` from `brian2.units.constants`:
+
+```python
+from brian2 import *
+from brian2.units.constants import zero_celsius
+
+celsius_temp = 37   # body temperature in °C
+abs_temp = celsius_temp * kelvin + zero_celsius
+print(abs_temp)     # 310.15 K
+```
+
+## Physical Constants
+
+The `brian2.units.constants` package provides a set of commonly needed physical constants, all with proper units:
+
+| Constant | Brian2 name | Value |
+|----------|-------------|-------|
+| Avogadro constant | `avogadro_constant` | 6.022 × 10²³ mol⁻¹ |
+| Boltzmann constant | `boltzmann_constant` | 1.381 × 10⁻²³ J K⁻¹ |
+| Electric constant (ε₀) | `electric_constant` | 8.854 × 10⁻¹² F m⁻¹ |
+| Electron mass | `electron_mass` | 9.109 × 10⁻³¹ kg |
+| Elementary charge | `elementary_charge` | 1.602 × 10⁻¹⁹ C |
+| Faraday constant | `faraday_constant` | 96 485 C mol⁻¹ |
+| Gas constant | `gas_constant` | 8.314 J mol⁻¹ K⁻¹ |
+| Magnetic constant (μ₀) | `magnetic_constant` | 12.566 × 10⁻⁷ N A⁻² |
+| Molar mass constant | `molar_mass_constant` | 10⁻³ kg mol⁻¹ |
+| 0 °C in Kelvin | `zero_celsius` | 273.15 K |
+
+Constants are **not** imported by default. Import them explicitly, optionally renaming for brevity:
+
+```python
+from brian2 import *
+from brian2.units.constants import (
+    zero_celsius,
+    gas_constant as R,
+    faraday_constant as F,
+)
+
+celsius_temp = 27
+T = celsius_temp * kelvin + zero_celsius
+factor = R * T / F   # RT/F factor in Goldman–Hodgkin–Katz equation
+print(factor)        # ~25.7 mV at 27 °C
+```
+
+## Importing Units
+
+The standard `from brian2 import *` imports all base units, derived units, and the convenience abbreviations described above. If you need the full set of prefixed and powered variants (e.g. `usiemens3`, `Ylumen3`), you can do:
+
+```python
+from brian2.units.allunits import *   # imports everything
+```
+
+This brings thousands of unit names into scope and is generally not recommended unless you specifically need an obscure variant.
+
+## In-Place Operations
+
+In-place operations on **quantity arrays** modify the underlying array in the same way as standard NumPy — any other variable referencing the same object is affected:
+
+```python
+q = [1, 2] * mV
+r = q
+q += 1 * mV
+print(r)   # array([ 2.,  3.]) * mvolt  ← r changed too
+```
+
+In-place operations on **scalar quantities** behave like Python scalars and return a new object:
+
+```python
+x = 1 * mV
+y = x
+x *= 2
+print(x)   # 2. mV
+print(y)   # 1. mV  ← y unchanged
+```

@@ -1,0 +1,389 @@
+---
+title: "Monitors API Reference — SpikeMonitor, StateMonitor, PopulationRateMonitor"
+sidebarTitle: "Monitors"
+description: "API reference for Brian2 monitor classes. SpikeMonitor records spike times, StateMonitor tracks variables, PopulationRateMonitor computes population firing rates."
+---
+
+Brian2 provides three monitor classes for extracting data from a running simulation without writing any custom code. `SpikeMonitor` records the time and index of every spike emitted by a group. `StateMonitor` samples the values of one or more state variables at every (or every N-th) time step. `PopulationRateMonitor` computes the instantaneous population-averaged firing rate. All monitors are passive observers: they do not modify the simulated network and can be added or removed between runs without resetting the simulation time.
+
+---
+
+## SpikeMonitor
+
+Records spikes from a `NeuronGroup` or any other spike source. Internally it is a specialisation of `EventMonitor` that listens for the `"spike"` event.
+
+### Constructor
+
+```python
+SpikeMonitor(
+    source,
+    variables=None,
+    record=True,
+    when=None,
+    order=None,
+    name="spikemonitor*",
+)
+```
+
+<ParamField path="source" type="NeuronGroup | SpikeSource" required>
+  The group to record spikes from. Must produce a `"spike"` event (i.e. must
+  have a `threshold` condition).
+</ParamField>
+
+<ParamField path="variables" type="str | list[str]" optional>
+  One or more state variable names to snapshot at the moment each spike is
+  recorded (e.g. `'v'` or `['v', 'w']`). Values are accessible as attributes
+  of the monitor after the run (e.g. `mon.v`).
+</ParamField>
+
+<ParamField path="record" type="bool" default="True">
+  If `True` (the default), individual spike times and indices are stored in
+  `i` and `t`. Set to `False` to record only the spike count per neuron
+  (accessible via `count`), saving memory for large groups.
+</ParamField>
+
+<ParamField path="when" type="str" optional>
+  Scheduling slot for recording. Defaults to the same slot as the source's
+  thresholder. See Brian2 scheduling docs for valid values.
+</ParamField>
+
+<ParamField path="order" type="int" optional>
+  Priority within the scheduling slot. Defaults to the thresholder's order + 1
+  so that spikes are recorded immediately after they are generated.
+</ParamField>
+
+<ParamField path="name" type="str" default='"spikemonitor*"'>
+  Unique name for the monitor object.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `i` | `ndarray` | Neuron index for each recorded spike, in chronological order. |
+| `t` | `Quantity` | Spike time for each recorded spike (same length as `i`). |
+| `t_` | `ndarray` | Spike times in seconds (no units). |
+| `it` | `(ndarray, Quantity)` | Convenience property returning `(i, t)` as a tuple. |
+| `count` | `ndarray` | Total number of spikes per neuron (length = N of source). |
+| `num_spikes` | `int` | Total number of spikes recorded across all neurons. |
+
+### Methods
+
+#### `spike_trains()`
+
+Return a dictionary mapping each neuron index to its array of spike times.
+
+```python
+trains = mon.spike_trains()
+# trains[0] → array of spike times for neuron 0
+```
+
+**Returns** `dict[int, Quantity]` — spike time arrays sorted by time.
+
+---
+
+#### `values(var)`
+
+Return a dictionary mapping neuron indices to arrays of a variable's value
+snapshotted at each spike time.
+
+```python
+v_at_spikes = mon.values("v")
+# v_at_spikes[3] → voltages recorded at the times neuron 3 spiked
+```
+
+**Parameters**
+
+<ParamField path="var" type="str" required>
+  Name of the variable to retrieve (must be listed in `variables` at
+  construction time).
+</ParamField>
+
+**Returns** `dict[int, Quantity]` — variable values sorted by spike time for
+each neuron.
+
+---
+
+#### `all_values()`
+
+Return a nested dict of all recorded variables (including `t`) for each
+neuron. Equivalent to calling `values()` for every recorded variable.
+
+**Returns** `dict[str, dict[int, Quantity]]`.
+
+---
+
+#### `binned_rate(bin_size)`
+
+Return per-neuron spike rates computed in time bins of the given size.
+
+```python
+bins, rates = mon.binned_rate(10 * ms)
+```
+
+**Parameters**
+
+<ParamField path="bin_size" type="Quantity" required>
+  Width of each bin. Must be a multiple of the simulation `dt`.
+</ParamField>
+
+**Returns** `(bins, rates)` where `bins` is a `Quantity` array of bin start
+times and `rates` is a 2-D `Quantity` array with shape `(N_neurons, N_bins)`
+in Hz.
+
+---
+
+### Example
+
+```python
+from brian2 import *
+
+tau = 10 * ms
+G = NeuronGroup(5, "dv/dt = (1 - v)/tau : 1",
+                threshold="v > 0.9", reset="v = 0",
+                namespace={"tau": tau})
+G.v = "rand()"
+
+mon = SpikeMonitor(G, variables="v")
+run(50 * ms)
+
+print("Spike indices:", mon.i[:])
+print("Spike times:",  mon.t[:])
+print("Spike trains:", mon.spike_trains())
+print("v at spikes for neuron 0:", mon.values("v")[0])
+```
+
+---
+
+## StateMonitor
+
+Records the time evolution of one or more state variables from any Brian2
+`Group`. Values are stored as 2-D arrays of shape `(n_recorded, n_timesteps)`.
+
+### Constructor
+
+```python
+StateMonitor(
+    source,
+    variables,
+    record,
+    dt=None,
+    clock=None,
+    when="start",
+    order=0,
+    name="statemonitor*",
+    dtype=None,
+)
+```
+
+<ParamField path="source" type="Group" required>
+  The group to record from (e.g. a `NeuronGroup` or `Synapses` object).
+</ParamField>
+
+<ParamField path="variables" type="str | list[str] | True" required>
+  Which variable(s) to record. A single string, a list of strings, or `True`
+  to record all variables (may use large amounts of memory).
+</ParamField>
+
+<ParamField path="record" type="bool | int | array-like" required>
+  Which neuron/synapse indices to record. `True` records all (memory-intensive
+  for standalone mode with synaptic variables), `False` records none, a single
+  integer records one neuron, or an array-like specifies an explicit subset.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Recording time step. A `StateMonitor` with `dt=2*ms` records every 2 ms
+  regardless of the simulation `dt`. Mutually exclusive with `clock`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  Explicit clock to drive the monitor. Mutually exclusive with `dt`. Defaults
+  to the source group's clock.
+</ParamField>
+
+<ParamField path="when" type="str" default='"start"'>
+  Scheduling slot. Defaults to `'start'`. Note that in an integrate-and-fire
+  model, `'start'` means the voltage has already been reset, so the trace will
+  never appear to cross threshold.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Scheduling priority within the slot.
+</ParamField>
+
+<ParamField path="name" type="str" default='"statemonitor*"'>
+  Unique name for this object.
+</ParamField>
+
+<ParamField path="dtype" type="dtype | dict" optional>
+  NumPy dtype for storing recorded values. A single dtype applies to all
+  variables; a dict maps variable names to specific dtypes. Defaults to the
+  dtype of each source variable.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `t` | `Quantity` | Array of recording times (length = number of recorded time steps). |
+| `t_` | `ndarray` | Recording times without units (seconds). |
+| `record` | `ndarray` | The recorded neuron/synapse indices. |
+| `*varname*` | `Quantity` | Each recorded variable is accessible as an attribute, shape `(n_recorded, n_timesteps)`. |
+
+Indexing the monitor with a neuron index returns a `StateMonitorView` for
+that neuron only:
+
+```python
+mon[3].v   # voltage trace for neuron 3
+mon[3].t   # time axis (same as mon.t)
+```
+
+### Methods
+
+#### `record_single_timestep()`
+
+Force the monitor to record the current state immediately, without advancing
+the simulation. Useful to capture the final time step, since the `'start'`
+slot never records the last completed step.
+
+```python
+run(10 * ms)
+mon.record_single_timestep()
+print(mon.t[-1])  # now includes the final time point
+```
+
+**Raises** `TypeError` if called before the network has been run at least
+once (even a `0*ms` run suffices).
+
+---
+
+### Example
+
+```python
+from brian2 import *
+
+eqs = """
+dv/dt = (I - v) / (10*ms) : 1
+I : 1
+"""
+G = NeuronGroup(3, eqs, threshold="v > 1", reset="v = 0")
+G.I = [1.2, 1.5, 1.8]
+
+mon = StateMonitor(G, ["v", "I"], record=[0, 2])
+run(50 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(mon.t / ms, mon.v.T)
+plt.xlabel("Time (ms)")
+plt.ylabel("v")
+plt.show()
+
+# Access a single neuron view
+print(mon[0].v[:5])  # first 5 samples for neuron 0
+```
+
+---
+
+## PopulationRateMonitor
+
+Records the instantaneous population-averaged firing rate at every time step
+of the source group's clock.
+
+### Constructor
+
+```python
+PopulationRateMonitor(
+    source,
+    name="ratemonitor*",
+)
+```
+
+<ParamField path="source" type="NeuronGroup | SpikeSource" required>
+  The spike-generating group whose average firing rate will be tracked.
+</ParamField>
+
+<ParamField path="name" type="str" default='"ratemonitor*"'>
+  Unique name for this object.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `t` | `Quantity` | Array of recording times (one entry per time step). |
+| `t_` | `ndarray` | Recording times in seconds (no unit). |
+| `rate` | `Quantity` | Instantaneous population firing rate at each time step (in Hz). |
+| `rate_` | `ndarray` | Rate values in Hz without units. |
+
+### Methods
+
+#### `smooth_rate(window="gaussian", width=None)`
+
+Return a smoothed firing rate trace by convolving with a window function.
+
+```python
+smoothed = pop_mon.smooth_rate(window="gaussian", width=2 * ms)
+```
+
+**Parameters**
+
+<ParamField path="window" type='str | ndarray' default='"gaussian"'>
+  Smoothing window. Use `"gaussian"` (standard deviation given by `width`) or
+  `"flat"` (rectangular, width rounded to the nearest odd multiple of `dt`).
+  Alternatively, pass a 1-D NumPy array with an odd number of elements as a
+  custom window; in this case `width` must not be provided, and the window is
+  normalised to sum 1.
+</ParamField>
+
+<ParamField path="width" type="Quantity" optional>
+  Standard deviation (Gaussian) or half-width (flat) of the window. Required
+  when using a string window name.
+</ParamField>
+
+**Returns** `Quantity` — smoothed rate in Hz, same length as `rate`.
+
+---
+
+#### `binned_rate(bin_size)`
+
+Compute the mean firing rate within non-overlapping time bins.
+
+```python
+bins, binned = pop_mon.binned_rate(10 * ms)
+```
+
+**Parameters**
+
+<ParamField path="bin_size" type="Quantity" required>
+  Width of each bin. Must be a multiple of the simulation `dt`.
+</ParamField>
+
+**Returns** `(bins, binned_values)` where `bins` is a `Quantity` array of
+bin start times and `binned_values` is a 1-D `Quantity` array in Hz.
+
+---
+
+### Example
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, "dv/dt = (2 - v)/(10*ms) : 1",
+                threshold="v > 1", reset="v = 0")
+G.v = "rand()"
+
+rate_mon = PopulationRateMonitor(G)
+run(200 * ms)
+
+import matplotlib.pyplot as plt
+plt.plot(rate_mon.t / ms, rate_mon.rate / Hz)
+plt.xlabel("Time (ms)")
+plt.ylabel("Rate (Hz)")
+plt.title("Population firing rate")
+
+# Smooth with a 5 ms Gaussian
+smoothed = rate_mon.smooth_rate(window="gaussian", width=5 * ms)
+plt.plot(rate_mon.t / ms, smoothed / Hz, lw=2, label="smoothed")
+plt.legend()
+plt.show()
+```

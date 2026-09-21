@@ -1,0 +1,319 @@
+---
+title: "Synapses in Brian2: Connecting and Modeling Neural Interactions"
+sidebarTitle: "Synapses"
+description: "Learn how to define synaptic models in Brian2, connect neuron groups, implement STDP plasticity, and control synaptic delays and weights."
+---
+
+The `Synapses` class in Brian2 is the single unified interface for all synaptic interactions — from the simplest fixed-weight connection to full spike-timing-dependent plasticity (STDP), gap junctions, and multi-pathway models. Like `NeuronGroup`, synapses are described by equation strings and event-driven code blocks. Creating a `Synapses` object only defines the model; the actual connections between specific neuron pairs are created separately with `Synapses.connect`.
+
+<Note>
+**Brian 1 users:** `Synapses` replaces `Connection`, `STDP`, and related classes from Brian 1. See the Brian 1 → 2 migration guide for conversion details.
+</Note>
+
+## Defining Synaptic Models
+
+### Minimal synapse
+
+The simplest synapse adds a fixed amount to the postsynaptic membrane potential on each presynaptic spike:
+
+```python
+from brian2 import *
+
+w = 1 * mV
+S = Synapses(P, Q, on_pre='v += w')
+```
+
+`v` is not declared as a synaptic variable, so Brian2 assumes it belongs to the postsynaptic group `Q`. The `on_pre` keyword defines the code executed at every synapse each time a presynaptic spike arrives.
+
+### Synaptic variables
+
+For a synapse-specific weight, declare it inside the `model` string:
+
+```python
+S = Synapses(P, Q, model='w : volt', on_pre='v += w')
+```
+
+The model string follows the exact same syntax as `NeuronGroup` equations: you can have parameters, subexpressions, and differential equations.
+
+### Pre and post code
+
+```python
+# on_post fires whenever the postsynaptic neuron spikes
+S = Synapses(P, Q,
+             model='w : 1',
+             on_pre='v_post += w',
+             on_post='w = clip(w - 0.01, 0, inf)')
+```
+
+<Note>
+Synaptic variables cannot share names with pre- or post-synaptic variables. To explicitly reference a pre- or post-synaptic variable by name, append `_pre` or `_post`:
+</Note>
+
+<CodeGroup>
+```python Pre-synaptic suffix
+# Equivalent ways to target the postsynaptic v
+on_pre='v += w'       # default: postsynaptic
+on_pre='v_post += w'  # explicit postsynaptic
+```
+
+```python Post-synaptic suffix
+# Accessing presynaptic variable in on_post
+on_post='apre_pre += 1'   # pre-synaptic trace
+on_post='apost_post += 1' # post-synaptic trace
+```
+</CodeGroup>
+
+### Stochastic synapses
+
+Any code block can include conditionals and random variables:
+
+```python
+S = Synapses(neuron_input, neurons,
+             model='''w : 1
+                       p : 1''',
+             on_pre='v += w * (rand() < p)')
+```
+
+## Creating Synapses
+
+`Synapses.connect` builds the actual connections. Until `connect` is called, no synapses exist even if the `Synapses` object is defined.
+
+### Direct index specification
+
+```python
+S.connect(i=5, j=10)               # single synapse: neuron 5 → neuron 10
+S.connect(i=[1, 2], j=[3, 4])      # neuron 1→3 and 2→4
+S.connect(i=np.arange(10), j=1)    # first 10 neurons all connect to neuron 1
+S.connect()                         # all-to-all
+```
+
+### Condition-based
+
+Connect all pairs `(i, j)` where a string condition is true:
+
+```python
+# Connect neurons within 5 indices of each other
+S.connect(condition='abs(i - j) <= 5')
+
+# Spatial connectivity (assuming x, y state variables exist)
+S.connect(condition='sqrt((x_pre-x_post)**2 + (y_pre-y_post)**2) < 250*umetre')
+```
+
+### Probabilistic
+
+```python
+S.connect(p=0.1)                  # 10% chance for every pair
+S.connect(condition='i != j', p=0.2)  # no autapses, 20% otherwise
+```
+
+### One-to-one
+
+```python
+S.connect(j='i')     # neuron i → neuron i
+S.connect(i='j')     # same, expressed from target side
+```
+
+### Generator syntax
+
+For flexible connectivity patterns:
+
+```python
+# Connect neuron i to all j with 0 <= j <= i
+S.connect(j='k for k in range(0, i+1)')
+
+# Random 10% sample of postsynaptic targets
+S.connect(j='k for k in sample(N_post, p=0.1)')
+
+# Skip invalid (out-of-range) indices gracefully
+S.connect(j='i+(-1)**k for k in range(2)', skip_if_invalid=True)
+```
+
+### Multiple synapses per pair
+
+```python
+# 3 synapses between each pair (useful for different delays)
+S.connect(i=np.arange(10), j=1, n=3)
+```
+
+## Synaptic Variables and Weights
+
+After `connect`, set synaptic variables using indexing by pre/post neuron indices, string expressions, or flat synapse indices:
+
+```python
+S.w[2, 5] = 1 * nS                            # single synapse
+S.w[1, :] = 2 * nS                            # all synapses from neuron 1
+S.w = 1 * nS                                   # all synapses
+S.w[:, :] = 'rand() * nS'                     # random weights
+S.w['abs(x_pre - x_post) < 250*umetre'] = 1*nS  # conditional
+
+# Normalize: each neuron receives total weight 1
+syn.w = '1.0 / N_incoming'
+```
+
+Brian2 provides automatic variables on each synapse:
+
+| Variable | Meaning |
+|----------|---------|
+| `i` | Index of the pre-synaptic source neuron |
+| `j` | Index of the post-synaptic target neuron |
+| `N` | Total number of synapses |
+| `N_incoming` | Number of synapses onto the post-synaptic target (per synapse) |
+| `N_outgoing` | Number of synapses from the pre-synaptic source (per synapse) |
+| `lastupdate` | Time of last event-driven update (when event-driven equations are used) |
+
+## Synaptic Delays
+
+A special synaptic variable `delay` is automatically created. Set it after `connect` like any other variable:
+
+```python
+S.delay = 1 * ms                  # scalar: same delay for all
+S.delay = '1*ms + rand()*4*ms'    # heterogeneous delays
+```
+
+To set a fixed global delay at construction time:
+
+```python
+synapses = Synapses(sources, targets, '...', on_pre='...', delay=1*ms)
+```
+
+When using multiple pathways (see below), access per-pathway delays via the pathway object:
+
+```python
+S.pre_plasticity.delay[0, 0] = 3 * ms
+```
+
+## Spike-Timing-Dependent Plasticity (STDP)
+
+STDP is naturally expressed using `(event-driven)` synaptic differential equations and paired `on_pre` / `on_post` code blocks:
+
+```python
+from brian2 import *
+
+taupre  = 20 * ms
+taupost = 20 * ms
+wmax    = 0.01
+Apre    =  0.01
+Apost   = -0.0105
+
+G_input  = PoissonGroup(100, rates=10*Hz)
+G_output = NeuronGroup(1,
+               'dv/dt = -v/(10*ms) : 1',
+               threshold='v > 1', reset='v = 0')
+
+S = Synapses(G_input, G_output,
+    model='''w    : 1
+             dApre/dt  = -Apre  / taupre  : 1 (event-driven)
+             dApost/dt = -Apost / taupost : 1 (event-driven)''',
+    on_pre='''v_post += w
+              Apre   += dApre_param
+              w = clip(w + Apost, 0, wmax)''',
+    on_post='''Apost += dApost_param
+               w = clip(w + Apre, 0, wmax)''',
+    namespace={'dApre_param': Apre, 'dApost_param': Apost,
+               'wmax': wmax})
+
+S.connect()
+S.w = 'rand() * wmax'
+
+run(1 * second)
+```
+
+The `(event-driven)` flag means Brian2 updates `Apre` and `Apost` analytically (solving the linear decay equation) only when a pre- or post-synaptic event arrives, making the simulation efficient regardless of the number of synapses.
+
+## Summed Variables (Postsynaptic Currents)
+
+When a postsynaptic variable should equal the **sum** of a synaptic variable across all incoming synapses, use the `(summed)` flag. This is the standard way to implement nonlinear synapses such as NMDA:
+
+```python
+neurons = NeuronGroup(1, '''dv/dt = (gtot - v) / (10*ms) : 1
+                             gtot : 1''')
+
+S = Synapses(neuron_input, neurons,
+             model='''dg/dt  = -a*g + b*x*(1-g) : 1
+                      gtot_post = g : 1  (summed)   # link g → gtot
+                      dx/dt = -c*x : 1
+                      w : 1''',
+             on_pre='x += w')
+```
+
+At each timestep Brian2 sums `g` over all synapses with the same `j` and copies the result into `gtot` in the postsynaptic group. For gap junctions:
+
+```python
+neurons = NeuronGroup(N, '''dv/dt = (v0 - v + Igap) / tau : 1
+                             Igap : 1''')
+S = Synapses(neurons,
+             model='''w : 1
+                      Igap_post = w*(v_pre - v_post) : 1 (summed)''')
+```
+
+<Note>
+Only one `Synapses` object can target a given post-synaptic summed variable. If you need multiple synapse objects to contribute to the same variable, declare separate postsynaptic variables and sum them in the `NeuronGroup` equations.
+</Note>
+
+## Multiple Pathways
+
+A single `Synapses` object can have multiple pre (or post) pathways, each with its own code and delay. Pass a dictionary of name → code:
+
+```python
+S = Synapses(P, Q,
+    model='''w    : 1
+             Apre : 1
+             Apost: 1''',
+    on_pre={
+        'pre_transmission': 'g_e_post += w',
+        'pre_plasticity':   '''w = clip(w + Apost, 0, inf)
+                                Apre += dApre'''
+    },
+    on_post={
+        'post_plasticity': '''Apost += dApost
+                               w = clip(w + Apre, 0, inf)'''
+    })
+```
+
+The specifying `on_pre=code` is shorthand for `on_pre={'pre': code}`. Per-pathway delays:
+
+```python
+# Model a rectangular synaptic current of width 5 ms
+synapses = Synapses(...,
+    on_pre={'up':   'I_syn_post += 1*nA',
+            'down': 'I_syn_post -= 1*nA'},
+    delay={'up': 0*ms, 'down': 5*ms})
+```
+
+To control execution order within the same timestep, set the `order` attribute:
+
+```python
+S.pre_transmission.order = -2   # runs before pre_plasticity
+```
+
+## Monitoring Synaptic Variables
+
+Use a `StateMonitor` on a `Synapses` object the same way as on a `NeuronGroup`. Index by synapse number or by a `Synapses` object expression:
+
+```python
+M = StateMonitor(S, 'w', record=[0, 1])              # synapse indices 0 and 1
+M = StateMonitor(S, 'w', record=S[0, :])             # all synapses from neuron 0
+M = StateMonitor(S, 'w', record=S['w > 0'])          # non-zero weight synapses
+M = StateMonitor(S, 'w', record=True)                # all synapses
+
+# Plot
+plot(M.t / ms, M[S[0, :]].w / nS)
+```
+
+## Event-Driven Updates (Manual)
+
+For full control over event-driven integration (e.g. short-term plasticity), declare `lastupdate` explicitly and implement the updates analytically in `on_pre`:
+
+```python
+S = Synapses(neuron_input, neuron,
+    model='''x : 1
+              u : 1
+              w : 1
+              lastupdate : second''',
+    on_pre='''u = U + (u - U)*exp(-(t - lastupdate)/tauf)
+               x = 1 + (x - 1)*exp(-(t - lastupdate)/taud)
+               i += w*u*x
+               x *= (1 - u)
+               u += U*(1 - u)
+               lastupdate = t''')
+```

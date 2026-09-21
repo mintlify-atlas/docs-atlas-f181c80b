@@ -1,0 +1,519 @@
+---
+title: "Migrating from Brian1 to Brian2: Complete Upgrade Guide"
+sidebarTitle: "Brian1 Migration"
+description: "Migrate neural simulations from Brian1 to Brian2. Key changes include NeuronGroup equations, Synapses replacing Connection, and the new units/namespace system."
+---
+
+Brian2 is a complete rewrite of the Brian neural simulator that retains the same high-level modelling philosophy while fixing fundamental design limitations of Brian1. The most significant changes affect how neural models are expressed (string-based equations replace class-based ones), how synaptic connections are defined (`Synapses` replaces `Connection`), and how networks are managed (the magic network is cleaner and clock handling is simplified). Brian1 depends on Python 2.x and is no longer maintained; a Docker container image is provided at `docker.io/briansimulator/brian1.4.3` for running legacy code while you migrate.
+
+## Key Differences at a Glance
+
+The table below summarises the most important API changes you will encounter when porting Brian1 code:
+
+| Concept                    | Brian1                                      | Brian2                                         |
+|----------------------------|---------------------------------------------|------------------------------------------------|
+| Threshold / Reset          | Objects (`Threshold`, `Reset`) or bare values | String expressions (`'v > -50*mV'`, `'v = -70*mV'`) |
+| Synaptic connections       | `Connection` class                          | `Synapses` class with `connect()`              |
+| STDP / plasticity          | Separate `STDP` class                       | Built into `Synapses` via `on_pre`/`on_post`   |
+| `pre` / `post` keywords    | `pre='...'`, `post='...'`                   | `on_pre='...'`, `on_post='...'`                |
+| Magic network              | Includes objects *created* in the same frame | Includes objects *visible* in the same frame  |
+| Clock reinitialisation     | `reinit_default_clock()`, `clear()`         | Create a new `Network` or use `start_scope()`  |
+| Subgroups                  | `group.subgroup(N)`                         | Slice syntax `group[:N]`                       |
+| Linked variables           | `group2.w = linked_var(group1, 'v')`        | Mark with `(linked)` flag in equations         |
+| Preferences                | `set_global_preferences(weavecompiler='gcc')` | `prefs.codegen.cpp.compiler = 'gcc'`          |
+| Spike data storage         | List of `(i, t)` pairs                      | Separate arrays `mon.i` and `mon.t`            |
+| Library neuron models      | `leaky_IF(...)`, `exp_IF(...)`, etc.        | Explicit equation strings                      |
+
+<Warning>
+  Brian1 depends on Python 2.x and is incompatible with modern Python environments. Do not attempt to run Brian1 code in a Python 3 environment. Use the official Docker image `docker.io/briansimulator/brian1.4.3` to run existing Brian1 scripts while you port them.
+</Warning>
+
+## Running Brian1 Code with Docker
+
+While migrating, you can continue to run existing Brian1 scripts using the official container image:
+
+```bash
+# Pull and tag the image
+docker pull docker.io/briansimulator/brian1.4.3
+docker tag briansimulator/brian1.4.3 brian1
+
+# Run a script (maps current directory into the container)
+docker run -v "$(pwd):/workdir" brian1 python myscript.py
+
+# On Windows Command Prompt
+docker run -v %cd%:/workdir brian1 python myscript.py
+
+# Interactive IPython session
+docker run -it -v "$(pwd):/workdir" brian1 ipython
+```
+
+<Tip>
+  The container sets the Matplotlib backend to `Agg` by default, so plots cannot be displayed interactively. Save figures to disk with `plt.savefig(...)` and inspect them on your host system.
+</Tip>
+
+## NeuronGroup Migration
+
+The most visible change in `NeuronGroup` is that threshold and reset are now always specified as string expressions. Class-based mechanisms (`Threshold`, `Reset`, `VariableThreshold`, `PoissonThreshold`, etc.) no longer exist.
+
+### Threshold and Reset
+
+<CodeGroup>
+```python Brian1
+group = NeuronGroup(N, 'dv/dt = -v / tau : volt',
+                    threshold=-50*mV,
+                    reset=-70*mV)
+
+# Variable threshold
+group2 = NeuronGroup(N, '''dv/dt = -v / tau : volt
+                           dvt/dt = -vt / tau : volt
+                           vr : volt''',
+                     threshold=VariableThreshold(state='v',
+                                                 threshold_state='vt'),
+                     reset=VariableThreshold(state='v',
+                                             resetvaluestate='vr'))
+
+# Poisson threshold
+group3 = NeuronGroup(N, 'rate : Hz',
+                     threshold=PoissonThreshold(state='rate'))
+```
+
+```python Brian2
+group = NeuronGroup(N, 'dv/dt = -v / tau : volt',
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV')
+
+# Variable threshold
+group2 = NeuronGroup(N, '''dv/dt = -v / tau : volt
+                           dvt/dt = -vt / tau : volt
+                           vr : volt''',
+                     threshold='v > vt',
+                     reset='v = vr')
+
+# Poisson threshold
+group3 = NeuronGroup(N, 'rate : Hz',
+                     threshold='rand() < rate*dt')
+```
+</CodeGroup>
+
+### Refractoriness
+
+In Brian1, refractoriness was tightly coupled to the reset mechanism. In Brian2 the two are independent: `refractory` specifies the duration of silence, and the `(unless refractory)` flag on an equation variable specifies what gets clamped.
+
+<CodeGroup>
+```python Brian1
+group = NeuronGroup(N, 'dv/dt = (I - v)/tau : volt',
+                    threshold=-50*mV,
+                    reset=-70*mV,
+                    refractory=3*ms)
+```
+
+```python Brian2
+group = NeuronGroup(N, 'dv/dt = (I - v)/tau : volt (unless refractory)',
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV',
+                    refractory=3*ms)
+```
+</CodeGroup>
+
+### Subgroups
+
+```python
+# Brian1
+group_exc = group.subgroup(3200)
+group_inh = group.subgroup(800)
+
+# Brian2
+group_exc = group[:3200]
+group_inh = group[3200:]
+```
+
+### Linked Variables
+
+In Brian2, linked variables must be annotated with the `(linked)` flag in the receiving group's equations:
+
+<CodeGroup>
+```python Brian1
+group1 = NeuronGroup(N, 'dv/dt = -v / tau : volt')
+group2 = NeuronGroup(N, '''dv/dt = (-v + w) / tau : volt
+                           w : volt''')
+group2.w = linked_var(group1, 'v')
+```
+
+```python Brian2
+group1 = NeuronGroup(N, 'dv/dt = -v / tau : volt')
+group2 = NeuronGroup(N, '''dv/dt = (-v + w) / tau : volt
+                           w : volt (linked)''')
+group2.w = linked_var(group1, 'v')
+```
+</CodeGroup>
+
+## Synapses Migration
+
+Brian2's `Synapses` class is the single class for all synaptic connections. Brian1's `Connection` class and its helper methods (`connect_full`, `connect_random`, `connect_one_to_one`) are replaced by `Synapses` combined with the `connect()` method.
+
+### Converting `Connection` to `Synapses`
+
+The key difference is that `Connection` implicitly incremented a post-synaptic variable, whereas `Synapses` requires you to state this explicitly in `on_pre`. Creating synapses and setting weights are also now separate operations.
+
+<CodeGroup>
+```python Brian1 – Connection
+# Basic connection
+conn = Connection(source, target, 'ge')
+conn[3, 5] = 3*nS
+
+# All-to-all
+conn2 = Connection(source, target, 'ge')
+conn2.connect_full(source, target, 5*nS)
+
+# Random (2% sparseness)
+conn3 = Connection(source, target, 'ge')
+conn3.connect_random(source, target, sparseness=0.02, weight=2*nS)
+
+# One-to-one
+conn4 = Connection(source, target, 'ge')
+conn4.connect_one_to_one(source, target, weight=4*nS)
+
+# Function-defined weights
+conn5 = Connection(source, target, 'ge')
+conn5.connect_full(source, target,
+                   weight=lambda i, j: (1 + cos(i-j))*2*nS)
+```
+
+```python Brian2 – Synapses
+# Basic connection
+conn = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn.connect(i=3, j=5)
+conn.w[3, 5] = 3*nS
+
+# All-to-all
+conn2 = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn2.connect()
+conn2.w = 5*nS
+
+# Random (2% sparseness)
+conn3 = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn3.connect(p=0.02)
+conn3.w = 2*nS
+
+# One-to-one
+conn4 = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn4.connect(j='i')
+conn4.w = 4*nS
+
+# String-expression weights (recommended over lambda functions)
+conn5 = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn5.connect()
+conn5.w = '(1 + cos(i - j))*2*nS'
+```
+</CodeGroup>
+
+### Delays
+
+In Brian1, heterogeneous delays required `delay=True` and an explicit `max_delay`. In Brian2, heterogeneous delays are the default and no maximum needs to be declared.
+
+<CodeGroup>
+```python Brian1
+conn = Connection(source, target, 'ge', delay=True, max_delay=5*ms)
+conn.connect_full(source, target, weight=3*nS, delay=(0*ms, 5*ms))
+```
+
+```python Brian2
+conn = Synapses(source, target, 'w : siemens', on_pre='ge += w')
+conn.connect()
+conn.w = 3*nS
+conn.delay = 'rand()*5*ms'
+```
+</CodeGroup>
+
+### STDP / Plasticity (`on_pre` / `on_post`)
+
+Brian1's `pre` and `post` keywords in `Synapses` have been renamed to `on_pre` and `on_post` in Brian2. The underlying plasticity model syntax is otherwise identical.
+
+<CodeGroup>
+```python Brian1 – STDP
+stdp_syn = Synapses(inputs, neurons,
+                    model='''w : 1
+                             dApre/dt  = -Apre/taupre   : 1 (event-driven)
+                             dApost/dt = -Apost/taupost : 1 (event-driven)''',
+                    pre='''ge += w
+                           Apre += delta_Apre
+                           w = clip(w + Apost, 0, gmax)''',
+                    post='''Apost += delta_Apost
+                            w = clip(w + Apre, 0, gmax)''')
+stdp_syn[:, :] = True
+```
+
+```python Brian2 – STDP
+stdp_syn = Synapses(inputs, neurons,
+                    model='''w : 1
+                             dApre/dt  = -Apre/taupre   : 1 (event-driven)
+                             dApost/dt = -Apost/taupost : 1 (event-driven)''',
+                    on_pre='''ge += w
+                              Apre += delta_Apre
+                              w = clip(w + Apost, 0, gmax)''',
+                    on_post='''Apost += delta_Apost
+                               w = clip(w + Apre, 0, gmax)''')
+stdp_syn.connect()
+```
+</CodeGroup>
+
+<Warning>
+  The `pre` and `post` keyword arguments are deprecated in Brian2 and will trigger a deprecation warning. Replace them with `on_pre` and `on_post` in all new and migrated code.
+</Warning>
+
+### Synapse Creation Syntax
+
+The Brian1 indexing syntax for creating synapses (`syn[:, :] = True`, `syn[3, 5] = True`, etc.) is replaced by explicit `connect()` calls:
+
+| Brian1                         | Brian2                         |
+|--------------------------------|--------------------------------|
+| `syn[3, 5] = True`             | `syn.connect(i=3, j=5)`        |
+| `syn[:, :] = True`             | `syn.connect()`                |
+| `syn[:, 1] = True`             | `syn.connect(j='1')`           |
+| `syn[4, 7] = 3`                | `syn.connect(i=4, j=7, n=3)`   |
+| `syn[:, :] = 0.02`             | `syn.connect(p=0.02)`          |
+
+## Monitors Migration
+
+### SpikeMonitor
+
+The spike data storage format has changed. Brian1 stored spikes as a list of `(i, t)` pairs; Brian2 stores them as two separate arrays accessible as attributes.
+
+<CodeGroup>
+```python Brian1 – SpikeMonitor
+mon = SpikeMonitor(group)
+# ... run ...
+
+list_of_pairs = mon.spikes
+index_list, time_list = zip(*list_of_pairs)
+index_array = array(index_list)
+time_array = array(time_list)   # unitless in Brian1
+
+# Per-neuron spike times
+spike_dict = mon.spiketimes
+spikes_3 = mon[3]               # no units
+```
+
+```python Brian2 – SpikeMonitor
+mon = SpikeMonitor(group)
+# ... run ...
+
+list_of_pairs = list(zip(*mon.it))
+index_list = list(mon.i)
+time_list  = list(mon.t)
+index_array, time_array = mon.i, mon.t   # time_array has units
+
+# Per-neuron spike times
+spike_dict = mon.spike_trains()
+spikes_3 = spike_dict[3]                 # with units
+```
+</CodeGroup>
+
+Brian2's `SpikeMonitor` also replaces Brian1's `SpikeCounter` and `PopulationSpikeCounter`:
+
+<CodeGroup>
+```python Brian1 – Counters
+counter = SpikeCounter(group)
+pop_counter = PopulationSpikeCounter(group)
+# ... run ...
+count_3 = counter[3]
+total_spikes = pop_counter.nspikes
+```
+
+```python Brian2 – Counters
+counter = SpikeMonitor(group, record=False)
+# ... run ...
+count_3 = counter.count[3]
+total_spikes = counter.num_spikes
+```
+</CodeGroup>
+
+### StateMonitor
+
+The `times` attribute has been renamed to `t` and individual neuron traces are accessed differently. `StateMonitor` now also records in the `'start'` slot by default (previously `'end'`), which means the value at `t=0` is now the true initial value rather than the value after the first integration step.
+
+<CodeGroup>
+```python Brian1 – StateMonitor
+mon = StateMonitor(group, 'v', record=True)
+# ... run ...
+plot(mon.times/ms, mon[3]/mV)           # single neuron
+plot(mon.times/ms, mon.values.T/mV)     # all neurons
+
+# Multiple variables
+mon2 = MultiStateMonitor(group, ['v', 'w'], record=True)
+plot(mon2['v'].times/ms, mon2['v'][3]/mV)
+plot(mon2['w'].times/ms, mon2['w'][3]/mV)
+```
+
+```python Brian2 – StateMonitor
+mon = StateMonitor(group, 'v', record=True)
+# ... run ...
+plot(mon.t/ms, mon[3].v/mV)            # single neuron
+plot(mon.t/ms, mon.v.T/mV)             # all neurons
+
+# Multiple variables — StateMonitor handles this directly
+mon2 = StateMonitor(group, ['v', 'w'], record=True)
+plot(mon2.t/ms, mon2[3].v/mV)
+plot(mon2.t/ms, mon2[3].w/mV)
+```
+</CodeGroup>
+
+<Tip>
+  If you need to capture the very last value at the end of a simulation (which is no longer recorded by default since the monitor now records at the start of each step), call `mon.record_single_timestep()` explicitly after the run.
+</Tip>
+
+### StateSpikeMonitor Replacement
+
+Brian1's `StateSpikeMonitor` is replaced by passing a `variables` argument to `SpikeMonitor`:
+
+<CodeGroup>
+```python Brian1
+mon = StateSpikeMonitor(group, 'v')
+# ... run ...
+mean_values = [mean(mon.values('v', idx)) for idx in range(len(group))]
+```
+
+```python Brian2
+mon = SpikeMonitor(group, variables='v')
+# ... run ...
+values = mon.values('v')
+mean_values = [mean(values[idx]) for idx in range(len(group))]
+```
+</CodeGroup>
+
+## Networks and Clocks Migration
+
+### Magic Network
+
+The logic for the magic `run()` function has changed. Brian1 included all objects *created* in the same execution frame; Brian2 includes all objects *visible* (i.e. accessible via a local variable) in the same frame. This eliminates a common Brian1 bug where objects from previous loop iterations accumulated in the network.
+
+<CodeGroup>
+```python Brian1 – Loop with reinit
+for r in range(100):
+    reinit_default_clock()
+    clear()
+    group1 = NeuronGroup(...)
+    group2 = NeuronGroup(...)
+    syn = Synapses(group1, group2, ...)
+    mon = SpikeMonitor(group2)
+    run(1*second)
+```
+
+```python Brian2 – Loop (no cleanup needed)
+for r in range(100):
+    group1 = NeuronGroup(...)
+    group2 = NeuronGroup(...)
+    syn = Synapses(group1, group2, ...)
+    mon = SpikeMonitor(group2)
+    run(1*second)  # only sees group1, group2, syn, mon
+```
+</CodeGroup>
+
+<Warning>
+  In Brian2, objects stored in containers (lists, dictionaries) are **not** automatically included in the magic network. Use an explicit `Network` object when your simulation uses containers:
+
+  ```python
+  groups = {'exc': NeuronGroup(...), 'inh': NeuronGroup(...)}
+  net = Network(groups)
+  net.run(5*ms)
+  ```
+</Warning>
+
+### External Constants and Namespace
+
+Brian2 takes external constants from the surrounding namespace at the point of the `run()` call, not at object creation. This makes it straightforward to change a parameter between consecutive runs:
+
+```python
+from brian2 import *
+
+tau = 10*ms
+group = NeuronGroup(10, 'dv/dt = (-v + I) / tau : 1')
+
+mon = StateMonitor(group, 'v', record=True)
+
+I = 0.0
+run(5*ms)
+
+I = 0.5   # updated value is picked up automatically
+run(5*ms)
+
+I = 0.0
+run(5*ms)
+```
+
+## Preferences Migration
+
+Brian1's `set_global_preferences()` function and `brian_global_config.py` module no longer exist. Use the `prefs` object or a Brian2 preferences file instead.
+
+<CodeGroup>
+```python Brian1
+set_global_preferences(weavecompiler='gcc')
+```
+
+```python Brian2
+from brian2 import *
+prefs.codegen.cpp.compiler = 'gcc'
+```
+</CodeGroup>
+
+Common preference name mappings:
+
+| Brian1 preference              | Brian2 preference                                       |
+|--------------------------------|---------------------------------------------------------|
+| `useweave`                     | `codegen.target` (use `'cython'` instead of weave)     |
+| `weavecompiler`                | `codegen.cpp.compiler`                                  |
+| `gcc_options`                  | `codegen.cpp.extra_compile_args_gcc`                    |
+| `openmp`                       | `devices.cpp_standalone.openmp_threads`                 |
+| `defaultclock`                 | Removed — set `defaultclock.dt` directly               |
+
+## Library Models Migration
+
+Brian1's library functions for neuron models (`leaky_IF`, `exp_IF`, `aEIF`, etc.) and the `MembraneEquation` / `Current` helper classes have no equivalent in Brian2. Replace them with explicit equation strings.
+
+<CodeGroup>
+```python Brian1 – Leaky integrate-and-fire
+eqs = (leaky_IF(tau=10*ms, El=-70*mV) +
+       Current('I : volt'))
+group = NeuronGroup(N, eqs,
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV')
+```
+
+```python Brian2 – Leaky integrate-and-fire
+tau = 10*ms
+El  = -70*mV
+eqs = '''dvm/dt = ((El - vm) + I) / tau : volt
+         I : volt'''
+group = NeuronGroup(N, eqs,
+                    threshold='vm > -50*mV',
+                    reset='vm = -70*mV')
+```
+</CodeGroup>
+
+<CodeGroup>
+```python Brian1 – AdEx (Brette-Gerstner)
+eqs = (aEIF(C=1*nF, gL=30*nS, EL=-70*mV,
+             VT=-50*mV, DeltaT=2*mV,
+             tauw=150*ms, a=4*nS) +
+       Current('I : amp'))
+group = NeuronGroup(N, eqs,
+                    threshold='v > -20*mV',
+                    reset=AdaptiveReset(Vr=-70*mV, b=0.08*nA))
+```
+
+```python Brian2 – AdEx (Brette-Gerstner)
+C = 1*nF; gL = 30*nS; EL = -70*mV
+VT = -50*mV; DeltaT = 2*mV
+tauw = 150*ms; a = 4*nS
+eqs = '''dvm/dt = (gL*(EL-vm) + gL*DeltaT*exp((vm-VT)/DeltaT) - w + I) / C : volt
+         dw/dt  = (a*(vm - EL) - w) / tauw : amp
+         I : amp'''
+group = NeuronGroup(N, eqs,
+                    threshold='vm > -20*mV',
+                    reset='vm = -70*mV; w += 0.08*nA')
+```
+</CodeGroup>
+
+<Tip>
+  All of Brian1's library synapse models (`exp_current`, `alpha_current`, `exp_conductance`, etc.) also need to be replaced with explicit `Equations` strings in Brian2. The pattern is straightforward: write out the differential equation that the library function was generating behind the scenes, and replace `pre='s += ...'` with `on_pre='s += ...'`.
+</Tip>

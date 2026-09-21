@@ -1,0 +1,251 @@
+---
+title: "Install Brian2 with conda, pip, or System Packages"
+sidebarTitle: "Installation"
+description: "Install Brian2 via conda-forge, pip, or Linux system packages. Covers dependencies, C++ compiler setup for Cython, and development install instructions."
+---
+
+Brian2 is available through several package managers, so you can install it using whichever tool you already use for managing your Python environment. For new users on Windows or macOS who do not yet have Python set up, the [Anaconda distribution](https://www.anaconda.com/distribution/#download-section) provides Python together with all of Brian2's dependencies and is the recommended starting point. Experienced users on Linux can also install Brian2 directly from their distribution's package manager.
+
+<Warning>
+  Brian2 requires **Python 3.12 or later**. Python 2 is not supported; the last Brian release to support Python 2 was Brian 2.3. All provided packages also require a **64-bit** system.
+</Warning>
+
+## Requirements
+
+The following packages are installed automatically as dependencies when you install Brian2 via `conda` or `pip`:
+
+| Package | Minimum version | Notes |
+|---|---|---|
+| Python | >= 3.12 | 64-bit required |
+| NumPy | >= 2.0 | Array computation |
+| SymPy | >= 1.2 | Symbolic mathematics |
+| Cython | >= 0.29.21 | C extension code generation |
+| PyParsing | >= 3 | Equation string parsing |
+| Jinja2 | >= 2.7 | Code template engine |
+| setuptools | >= 61 | Build tooling |
+| packaging | any | Version handling |
+| py-cpuinfo | any | **Windows only** |
+
+### Optional packages
+
+These packages are not required to run Brian2 but unlock additional functionality:
+
+| Package | Minimum version | Purpose |
+|---|---|---|
+| GSL | >= 1.16 | GNU Scientific Library ODE solvers |
+| SciPy | >= 0.13.3 | Additional scientific routines |
+| Matplotlib | >= 2.0 | Plotting simulation results |
+
+## Installing Brian2
+
+We recommend installing Brian2 into a dedicated environment (a `conda` environment or a Python virtual environment) so that updating packages for one project cannot break another.
+
+<Tabs>
+  <Tab title="conda">
+    Brian2 is not part of the default Anaconda distribution, but is available on [conda-forge](https://conda-forge.org/). Create a new environment and install Brian2 in one step:
+
+    ```bash
+    conda create -n brian2env python=3.12
+    conda activate brian2env
+    conda install -c conda-forge brian2
+    ```
+
+    Alternatively, add the `conda-forge` channel permanently so that you can install and update Brian2 without specifying the channel each time:
+
+    ```bash
+    conda config --add channels conda-forge
+    conda install brian2
+    ```
+
+    To **update** an existing conda installation:
+
+    ```bash
+    conda update -c conda-forge brian2
+    # or, if you already added conda-forge to your channels:
+    conda update brian2
+    ```
+  </Tab>
+  <Tab title="pip">
+    Brian2 is available on [PyPI](https://pypi.python.org/pypi/Brian2). Install it into a virtual environment:
+
+    ```bash
+    python -m venv brian2env
+    source brian2env/bin/activate   # Windows: brian2env\Scripts\activate
+    python -m pip install brian2
+    ```
+
+    If `pip` is not available in your current environment, bootstrap it first:
+
+    ```bash
+    python -m ensurepip
+    python -m pip install brian2
+    ```
+
+    To **update** an existing pip installation:
+
+    ```bash
+    python -m pip install -U brian2
+    ```
+  </Tab>
+  <Tab title="Ubuntu / Debian">
+    On Debian, Ubuntu, Linux Mint, and other Debian-based distributions, you can install Brian2 from the official package repository. The package is maintained by the [Debian Med](https://www.debian.org/devel/debian-med/) team:
+
+    ```bash
+    sudo apt install python3-brian
+    ```
+
+    To update:
+
+    ```bash
+    sudo apt update
+    sudo apt install python3-brian
+    ```
+
+    <Note>
+      The version available in the distribution repository may lag slightly behind the latest Brian2 release. Use `pip` or `conda` if you need the most recent version.
+    </Note>
+  </Tab>
+  <Tab title="Fedora">
+    On Fedora Linux, Brian2 is packaged by the [NeuroFedora](https://docs.fedoraproject.org/en-US/neurofedora/overview/) team and can be installed with `dnf`:
+
+    ```bash
+    sudo dnf install python-brian2
+    ```
+
+    To update:
+
+    ```bash
+    sudo dnf check-update python-brian2
+    sudo dnf upgrade python-brian2
+    ```
+
+    <Note>
+      As with the Debian package, the Fedora repository version may not always reflect the very latest Brian2 release. Use `pip` or `conda` for the most up-to-date version.
+    </Note>
+  </Tab>
+</Tabs>
+
+## C++ Compiler Setup
+
+C++ code generation via Cython is **highly recommended** because it can dramatically increase simulation speed compared to the pure-Python fallback. Cython is installed automatically as a Brian2 dependency, but you also need a working C++ compiler on your system.
+
+<Tabs>
+  <Tab title="Linux and macOS">
+    On Linux and macOS, the `conda` package automatically installs a compatible C++ compiler. If you installed Brian2 via `pip` or a system package manager, you most likely already have `g++` available. Verify with:
+
+    ```bash
+    g++ --version
+    ```
+
+    If `g++` is not found, install it using your distribution's package manager (e.g. `sudo apt install g++` on Debian/Ubuntu, or `sudo dnf install gcc-c++` on Fedora).
+  </Tab>
+  <Tab title="Windows">
+    On Windows, the Cython (runtime) code generation backend requires the **Microsoft Visual C++ Build Tools**. You do not need a full Visual Studio installation — the smaller "Build Tools" package is sufficient:
+
+    1. Download and run the [Microsoft C++ Build Tools installer](https://visualstudio.microsoft.com/visual-cpp-build-tools/).
+    2. In the installer, select **C++ build tools** and ensure the latest versions of **MSVC build tools** and the **Windows 10 SDK** are checked.
+    3. Ensure that your `setuptools` package is at least version 34.4.0:
+
+    ```bash
+    # conda
+    conda update setuptools
+
+    # pip
+    python -m pip install --upgrade setuptools
+    ```
+
+    For the standalone C++ backend, you can use either the Build Tools installed above or any full Visual Studio installation.
+  </Tab>
+</Tabs>
+
+## Verifying Your Installation
+
+After installing Brian2, verify that it imported correctly and run the built-in test suite:
+
+```python
+import brian2
+
+# Print the installed version
+print(brian2.__version__)
+
+# Run the test suite (requires pytest >= 8)
+brian2.test()
+```
+
+The test suite should complete with `"OK"`. You may see a number of skipped tests (for features whose optional dependencies are not installed), but there should be no errors or failures.
+
+You can also run a quick sanity check by simulating a single leaky integrate-and-fire neuron:
+
+```python
+from brian2 import *
+
+tau = 10*ms
+eqs = 'dv/dt = (1-v)/tau : 1'
+
+G = NeuronGroup(1, eqs, threshold='v > 0.8', reset='v = 0', method='exact')
+spikemon = SpikeMonitor(G)
+
+run(50*ms)
+print('Spike times:', spikemon.t)
+```
+
+If this prints a list of spike times without errors, your installation is working correctly.
+
+## Installing Optional Packages
+
+Several packages are useful for interactive work with Brian2 but are not required:
+
+<Tabs>
+  <Tab title="conda">
+    ```bash
+    conda install matplotlib pytest ipython notebook
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    python -m pip install matplotlib pytest ipython notebook
+    ```
+  </Tab>
+</Tabs>
+
+The [brian2tools](https://brian2tools.readthedocs.io) package provides additional functions for visualising Brian2 simulations and recordings:
+
+<Tabs>
+  <Tab title="conda">
+    ```bash
+    # brian2tools is on the brian-team channel, not conda-forge
+    conda install -c brian-team brian2tools
+    ```
+  </Tab>
+  <Tab title="pip">
+    ```bash
+    python -m pip install brian2tools
+    ```
+  </Tab>
+</Tabs>
+
+## Development Installation
+
+If you want to contribute to Brian2 or test the latest unreleased changes, you can install the development version directly.
+
+**From PyPI test server** (includes changes since the last release):
+
+```bash
+python -m pip install --upgrade --pre -i https://test.pypi.org/simple/ Brian2
+```
+
+**From GitHub** (latest commit on the main branch):
+
+```bash
+python -m pip install git+https://github.com/brian-team/brian2.git
+```
+
+**Editable install** (recommended for contributors — changes to the source are reflected immediately without reinstalling):
+
+```bash
+git clone https://github.com/brian-team/brian2.git
+cd brian2
+pip install -e .
+```
+
+With an editable install, pulling the latest commits with `git pull` is sufficient to update your installation — you do not need to run `pip install` again.

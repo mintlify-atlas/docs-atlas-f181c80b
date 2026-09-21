@@ -1,0 +1,210 @@
+---
+title: "Custom Functions in Brian2 Equations and Code Generation"
+sidebarTitle: "Functions"
+description: "Use built-in mathematical functions in Brian2 equations and define custom functions with implementations for numpy and C++ code generation targets."
+---
+
+All equations, expressions, and statements in Brian2 can call mathematical functions directly, but every function must be prepared for use with Brian for two reasons: the unit system needs to know how a function transforms physical dimensions, and each code generation target (NumPy, Cython, C++ standalone) needs its own implementation. Brian ships with a comprehensive set of **default functions** that already satisfy both requirements, and provides a clean mechanism for users to register new ones.
+
+## Default Functions
+
+The following functions are available in any Brian equation or expression without any additional imports. They are stored in the `DEFAULT_FUNCTIONS` dictionary and have implementations for both the `numpy` and `cpp`/`cython` code generation targets.
+
+<CardGroup cols={2}>
+  <Card title="Random Numbers">
+    - `rand()` — uniform distribution on [0, 1)
+    - `randn()` — standard normal (mean 0, std 1)
+    - `poisson(lambda)` — discrete Poisson distribution with rate λ
+  </Card>
+  <Card title="Elementary Functions">
+    - `sqrt`, `exp`, `log`, `log10`
+    - `abs`, `sign`
+  </Card>
+  <Card title="Trigonometric Functions">
+    - `sin`, `cos`, `tan`
+    - `sinh`, `cosh`, `tanh`
+    - `arcsin`, `arccos`, `arctan`
+  </Card>
+  <Card title="Numerical Accuracy">
+    - `expm1(x)` — computes `exp(x) - 1`, accurate near x = 0
+    - `log1p(x)` — computes `log(1 + x)`, accurate near x = 0
+    - `exprel(x)` — computes `(exp(x) - 1) / x`, returns 1.0 at x = 0
+  </Card>
+  <Card title="Utility Functions">
+    - `clip(x, low, high)` — clamp x to [low, high]
+    - `floor(x)`, `ceil(x)`
+    - `int(x)` — convert to integer (useful for boolean-to-integer)
+  </Card>
+  <Card title="Special Purpose">
+    - `timestep(t, dt)` — convert time to integer step count, avoiding floating-point rounding issues
+  </Card>
+</CardGroup>
+
+The `int` function is particularly useful for conditional logic inside equations where an `if` statement is not available:
+
+```python
+# Reset v to v_r1 or v_r2 depending on w
+reset = 'v = v_r1 * int(w <= 0.5) + v_r2 * int(w > 0.5)'
+```
+
+## Defining Custom Functions
+
+### Python / NumPy Target Only
+
+If a function will only ever run under the `numpy` code generation target, you only need to declare its units. The simplest way is the `check_units` decorator:
+
+```python
+from brian2 import *
+
+@check_units(x1=meter, y1=meter, x2=meter, y2=meter, result=meter)
+def distance(x1, y1, x2, y2):
+    return sqrt((x1 - x2)**2 + (y1 - y2)**2)
+```
+
+Alternatively, wrap the function in a `Function` object:
+
+```python
+from brian2 import *
+
+def distance(x1, y1, x2, y2):
+    return sqrt((x1 - x2)**2 + (y1 - y2)**2)
+
+distance = Function(distance,
+                    arg_units=[meter, meter, meter, meter],
+                    return_unit=meter)
+```
+
+<Note>
+Every custom function **must** declare its units, either via `@check_units`, via the `arg_units`/`return_unit` arguments of `Function`, or via the `@declare_types` decorator. Brian's unit-checking system will raise a `DimensionMismatchError` at simulation time if unit information is missing or inconsistent.
+</Note>
+
+### Improving NumPy Performance with `discard_units`
+
+Brian's runtime unit-checking adds overhead. You can tell Brian to strip units before calling your function by adding the `@implementation` decorator with `discard_units=True`:
+
+```python
+from brian2 import *
+
+@implementation('numpy', discard_units=True)
+@check_units(I=amp, result=Hz)
+def piecewise_linear(I):
+    return clip((I - 1*nA) * 50*Hz/nA, 0*Hz, 100*Hz)
+```
+
+When called outside a simulation the function still requires proper units; the optimisation only applies during the simulation run.
+
+### Providing a C++ Implementation
+
+To make a custom function available for the `cython` or `cpp_standalone` targets, supply a C++ implementation string via `@implementation`:
+
+```python
+from brian2 import *
+
+@implementation('cpp', '''
+    double piecewise_linear(double I) {
+        if (I < 1e-9)
+            return 0;
+        if (I > 3e-9)
+            return 100;
+        return (I/1e-9 - 1) * 50;
+    }
+    ''')
+@check_units(I=amp, result=Hz)
+def piecewise_linear(I):
+    return clip((I - 1*nA) * 50*Hz/nA, 0*Hz, 100*Hz)
+```
+
+The same approach works for the `'cython'` target using Cython syntax:
+
+```python
+from brian2 import *
+
+@implementation('cython', '''
+    cdef double piecewise_linear(double I):
+        if I < 1e-9:
+            return 0.0
+        elif I > 3e-9:
+            return 100.0
+        return (I/1e-9 - 1) * 50
+    ''')
+@check_units(I=amp, result=Hz)
+def piecewise_linear(I):
+    return clip((I - 1*nA) * 50*Hz/nA, 0*Hz, 100*Hz)
+```
+
+### Declaring Return Type
+
+By default, Brian assumes functions return a floating-point value. If your function returns an integer or boolean, declare the types explicitly to avoid incorrect code-generation optimisations:
+
+```python
+from brian2 import *
+
+@check_units(a=1, b=1, result=1)
+@declare_types(a='integer', result='highest')
+def f(a, b):
+    return a * b
+```
+
+### Dependencies Between Functions
+
+When a custom C++ function internally calls another custom function, declare the dependency explicitly so the code generator includes both definitions:
+
+```python
+from brian2 import *
+
+@implementation('cpp', '''
+    double rectified_linear(double x) {
+        return clip(x, 0, INFINITY);
+    }''',
+    dependencies={'clip': DEFAULT_FUNCTIONS['clip']}
+)
+@check_units(x=1, result=1)
+def rectified_linear(x):
+    return np.clip(x, 0, np.inf)
+```
+
+## Using External Libraries
+
+Custom functions can link to external C++ libraries by passing compiler keyword arguments to `@implementation`:
+
+```python
+from brian2 import *
+
+@implementation('cpp', '...',
+                libraries=['foo'],
+                library_dirs=['/usr/local/foo'],
+                headers=['"foo.h"'],
+                include_dirs=['/usr/local/foo'])
+@check_units(x=1, result=1)
+def my_external_func(x):
+    ...  # numpy fallback
+```
+
+The supported keyword arguments are:
+
+| Keyword                 | C++ standalone | Cython |
+|-------------------------|:--------------:|:------:|
+| `headers`               | ✓              | ✗      |
+| `sources`               | ✓              | ✓      |
+| `define_macros`         | ✓              | ✗      |
+| `libraries`             | ✓              | ✓      |
+| `include_dirs`          | ✓              | ✓      |
+| `library_dirs`          | ✓              | ✓      |
+| `runtime_library_dirs`  | ✓              | ✓      |
+
+You can also point to external source files directly, avoiding the need to embed long C++ strings in your Python script:
+
+```python
+import os
+from brian2 import *
+
+current_dir = os.path.abspath(os.path.dirname(__file__))
+
+@implementation('cpp', '// all code in piecewise_linear.cpp',
+                sources=[os.path.join(current_dir, 'piecewise_linear.cpp')],
+                headers=['"piecewise_linear.h"'],
+                include_dirs=[current_dir])
+@check_units(I=amp, result=Hz)
+def piecewise_linear(I):
+    return clip((I - 1*nA) * 50*Hz/nA, 0*Hz, 100*Hz)
+```

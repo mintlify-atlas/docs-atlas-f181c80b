@@ -1,0 +1,162 @@
+---
+title: "Simulation Scheduling and Clock Management in Brian2"
+sidebarTitle: "Scheduling"
+description: "Understand how Brian2 schedules updates within each timestep. Control execution order with the when and order parameters for neuron groups, synapses, and operations."
+---
+
+Every Brian2 simulation advances in discrete time steps, and within each step a number of computational objects — state updaters, threshold detectors, reset routines, synaptic propagators, monitors — must execute in a specific, well-defined order. Brian manages this through a **schedule**: a ranked list of named execution slots. Understanding and controlling the schedule allows you to ensure, for example, that a monitor records membrane potentials before a reset is applied, or that a custom network operation runs at exactly the right moment relative to synaptic propagation.
+
+## The Simulation Time Step
+
+All objects in a network share a common clock unless they explicitly specify their own. The global default clock is accessed as `defaultclock`, and its time step `dt` defaults to 0.1 ms:
+
+```python
+from brian2 import *
+
+defaultclock.dt = 0.05*ms   # 50 μs time step for all objects
+```
+
+To give a specific object a different time step, pass `dt` at construction time:
+
+```python
+# Record membrane potential only every 1 ms, not at every simulation step
+s_mon = StateMonitor(group, 'v', record=True, dt=1*ms)
+```
+
+Behind the scenes, Brian creates a separate `Clock` object for each unique `dt` value. You can also create a `Clock` explicitly and share it between several objects:
+
+```python
+slow_clock = Clock(dt=1*ms)
+mon1 = StateMonitor(group, 'v', record=True, clock=slow_clock)
+mon2 = StateMonitor(group, 'u', record=True, clock=slow_clock)
+# Now both monitors share the same clock; changing slow_clock.dt updates both
+```
+
+## The Default Schedule
+
+During each time step, Brian executes objects in the order defined by `Network.schedule`. The default schedule is:
+
+<Note>
+The default execution order within a time step is:
+
+`start` → `groups` → `thresholds` → `synapses` → `resets` → `end`
+
+Brian automatically assigns each object type a sensible default slot: state updaters run in `groups`, threshold detectors in `thresholds`, synaptic propagation in `synapses`, and reset statements in `resets`. Monitors default to the `start` slot so they capture state *before* any updates occur.
+</Note>
+
+You can inspect the full schedule for your network using `scheduling_summary`:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(10, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+mon = StateMonitor(group, 'v', record=True, dt=1*ms)
+scheduling_summary()
+```
+
+This prints a table showing each object, its parent group, clock `dt`, `when` slot, `order` value, and whether it is currently active.
+
+## Controlling When Operations Run
+
+The `when` parameter accepted by most Brian objects specifies which execution slot the object occupies. In addition to the six named slots, Brian recognises compound names such as `'before_thresholds'`, `'after_thresholds'`, `'before_synapses'`, `'after_resets'`, etc.
+
+A common use case: record the membrane potential *after* the reset so you can observe threshold crossings in the trace, rather than the default behaviour of recording before any updates:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+
+# Default: records at 'start', before reset
+mon_before = StateMonitor(group, 'v', record=True)
+
+# Records after the reset has been applied
+mon_after = StateMonitor(group, 'v', record=True, when='after_resets')
+
+run(100*ms)
+```
+
+## Controlling Order Within a Slot
+
+When two or more objects occupy the same execution slot, they are sorted by their `order` attribute (an integer, defaulting to 0). Lower values run first. Objects with identical `when` and `order` are executed in a deterministic but arbitrary order based on their names.
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+
+# Two monitors in the same slot; mon_first records before mon_second
+mon_first  = StateMonitor(group, 'v', record=True, when='start', order=0)
+mon_second = StateMonitor(group, 'v', record=True, when='start', order=1)
+
+run(10*ms)
+```
+
+## Multiple Clocks
+
+Objects running on different clocks are interleaved correctly: at each moment in simulated time, only the objects whose clock has reached that moment are updated. This allows, for example, fast neurons and slow monitors to coexist in the same network:
+
+```python
+from brian2 import *
+
+defaultclock.dt = 0.1*ms
+
+group = NeuronGroup(1000, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+group.v = 'rand()'
+
+# Monitor records every 1 ms rather than every 0.1 ms
+mon = StateMonitor(group, 'v', record=True, dt=1*ms)
+
+run(500*ms)
+```
+
+## Network Operation Scheduling
+
+`NetworkOperation` objects (created with the `@network_operation` decorator or by subclassing) also accept `when` and `dt` parameters, giving you precise control over when custom Python code runs relative to the rest of the simulation:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100, 'dv/dt = -v/(10*ms) + I : 1',
+                    threshold='v > 1', reset='v = 0')
+group.namespace['I'] = 0.0
+
+@network_operation(when='start', dt=10*ms)
+def update_input(t):
+    # Inject a current pulse between 50 ms and 150 ms
+    group.namespace['I'] = 1.5 if 50*ms <= t < 150*ms else 0.0
+
+mon = SpikeMonitor(group)
+run(300*ms)
+```
+
+<Note>
+`NetworkOperation` objects are only available in runtime mode. They will not work in C++ standalone mode because the Python function cannot be translated into standalone C++ code.
+</Note>
+
+## Activating Objects for Part of a Simulation
+
+If you want a monitor or other object to be active only for a portion of the simulation, set its `active` attribute:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+group.v = 'rand()'
+mon = SpikeMonitor(group)
+
+# Burn-in period: do not record
+mon.active = False
+run(500*ms)
+
+# Recording period: start recording
+mon.active = True
+run(200*ms)
+
+print(f"Spikes recorded: {mon.num_spikes}")
+```

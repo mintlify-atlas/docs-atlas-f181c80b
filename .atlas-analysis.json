@@ -1,0 +1,125 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "Brian2",
+  "projectDescription": "Brian2 is a free, open-source, clock-driven Python simulator for spiking neural networks, designed to be flexible, efficient, and easy to use for computational neuroscience research.",
+  "theme": "palm",
+  "primaryColor": "#035b8f",
+  "lightColor": "#333e63",
+  "darkColor": "#dcc404",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "User Guide",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "user/units",
+              "user/models-and-neuron-groups",
+              "user/equations",
+              "user/synapses",
+              "user/numerical-integration"
+            ]
+          },
+          {
+            "group": "Building Simulations",
+            "pages": [
+              "user/input-stimuli",
+              "user/recording",
+              "user/running",
+              "user/multicompartmental"
+            ]
+          },
+          {
+            "group": "Advanced Topics",
+            "pages": [
+              "advanced/computation",
+              "advanced/functions",
+              "advanced/preferences",
+              "advanced/scheduling",
+              "advanced/custom-events"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Examples & Reference",
+        "groups": [
+          {
+            "group": "Examples",
+            "pages": [
+              "examples/overview",
+              "examples/from-papers"
+            ]
+          },
+          {
+            "group": "API Reference",
+            "pages": [
+              "reference/neurongroup",
+              "reference/synapses",
+              "reference/monitors",
+              "reference/network",
+              "reference/input-groups"
+            ]
+          },
+          {
+            "group": "Resources",
+            "pages": [
+              "resources/support",
+              "resources/compatibility",
+              "resources/brian1-migration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Clock-driven spiking neural network simulation",
+    "Expressive equation-based model definition using strings",
+    "Physical units system with automatic dimensional analysis",
+    "Multiple code generation targets: Python (numpy), Cython, and C++ standalone",
+    "Flexible synapse models with STDP and plasticity rules",
+    "Multicompartmental neuron modeling with SpatialNeuron",
+    "Built-in monitors for spikes, state variables, and population rates",
+    "Magic network system for automatic object collection",
+    "Rich input stimulus options: Poisson groups, spike generators, timed arrays",
+    "GSL integration for advanced numerical ODE methods",
+    "Customizable preferences and logging system",
+    "Custom event system beyond standard spike events"
+  ],
+  "publicApiSurface": [
+    "NeuronGroup(N, model, threshold, reset, refractory, method, dt, clock, namespace)",
+    "Synapses(source, target, model, on_pre, on_post, delay, method)",
+    "Synapses.connect(condition, i, j, p, n)",
+    "Network(objects)",
+    "Network.run(duration, report, namespace)",
+    "run(duration, report, namespace)",
+    "SpikeMonitor(source, variables, record)",
+    "StateMonitor(source, variables, record, dt)",
+    "PopulationRateMonitor(source)",
+    "PoissonGroup(N, rates)",
+    "PoissonInput(target, target_var, N, rate, weight)",
+    "SpikeGeneratorGroup(N, indices, times)",
+    "TimedArray(values, dt)",
+    "SpatialNeuron(morphology, model, method)",
+    "Morphology (Soma, Cylinder, Section)",
+    "Equations(expr)",
+    "prefs (BrianGlobalPreferences)",
+    "set_device(device_name)",
+    "get_device()",
+    "seed(seed_value)",
+    "defaultclock",
+    "linked_var(group, variable)",
+    "restore_initial_state()",
+    "collect()"
+  ]
+}

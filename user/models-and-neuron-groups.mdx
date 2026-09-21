@@ -1,0 +1,288 @@
+---
+title: "NeuronGroup: Define and Simulate Neuron Populations"
+sidebarTitle: "Neuron Groups"
+description: "Learn how to define neuron models in Brian2 using NeuronGroup. Covers equation strings, threshold and reset conditions, noise, refractoriness, and subgroups."
+---
+
+The `NeuronGroup` is the core building block of virtually every Brian2 simulation. It represents a population of neurons that share the same equations, threshold condition, and reset rules, but can have different state-variable values (e.g. heterogeneous time constants or initial voltages). You describe the neuron dynamics as a plain text equation string, and Brian2 takes care of generating and running the efficient numerical integration behind the scenes.
+
+<Note>
+**Brian 1 users:** The `NeuronGroup` interface changed significantly between Brian 1 and Brian 2. The equation syntax, threshold/reset specification, and refractoriness handling are all different. See the Brian 1 → 2 migration guide for a detailed comparison.
+</Note>
+
+## Model Equations
+
+The minimum required arguments to `NeuronGroup` are the number of neurons and a model description given as an equation string:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : volt')
+```
+
+This creates 10 leaky integrators. Equation strings can also reference variables defined in the surrounding Python scope:
+
+```python
+tau = 10 * ms
+G = NeuronGroup(10, 'dv/dt = -v / tau : volt')
+```
+
+### Parameters (per-neuron variables)
+
+If a variable should differ across neurons — for example a per-neuron time constant — it must be declared inside the equation string as a **parameter**:
+
+```python
+G = NeuronGroup(10, '''dv/dt = -v / tau : volt
+                        tau : second''')
+```
+
+Parameters are state variables with no differential equation. Their values can be set freely after construction.
+
+### Subexpressions
+
+Named subexpressions keep complex models readable and allow intermediate quantities to be recorded:
+
+```python
+G = NeuronGroup(10, '''dv/dt = I_leak / Cm : volt
+                        I_leak = g_L * (E_L - v) : amp''')
+```
+
+`I_leak` is recomputed on demand whenever it is used; it is not stored separately in memory.
+
+### Multi-line equations
+
+For larger models, use a triple-quoted string with one equation per line. Comments with `#` are allowed:
+
+```python
+eqs = '''
+dv/dt = (g_L*(E_L - v) + g_e*(E_e - v) + g_i*(E_i - v)) / C_m : volt
+dg_e/dt = -g_e / tau_e : siemens   # excitatory conductance
+dg_i/dt = -g_i / tau_i : siemens   # inhibitory conductance
+'''
+G = NeuronGroup(N, eqs, threshold='v > -50*mV', reset='v = -70*mV')
+```
+
+## Threshold and Reset
+
+To produce spikes, specify a threshold condition and a reset statement as strings:
+
+```python
+tau = 10 * ms
+G = NeuronGroup(10, 'dv/dt = -v / tau : volt',
+                threshold='v > -50*mV',
+                reset='v = -70*mV')
+```
+
+Whenever the threshold condition becomes `True`, the reset code runs and the spike is recorded. Both strings can reference physical units, external variables, and per-neuron parameters:
+
+```python
+v_r = -70 * mV  # reset potential defined outside
+
+G = NeuronGroup(10, '''dv/dt = -v / tau : volt
+                        v_th : volt''',          # per-neuron threshold
+                threshold='v > v_th',
+                reset='v = v_r')
+```
+
+The reset statement can contain multiple lines separated by semicolons or newlines:
+
+```python
+G = NeuronGroup(N, '''dv/dt = -(v + w) / tau_v : 1
+                       dw/dt = -w / tau_w : 1''',
+                threshold='v > 1',
+                reset='''v = 0
+                          w += 0.1''')
+```
+
+## Noise: Stochastic Differential Equations
+
+Brian2 supports stochastic differential equations (SDEs) using the physicists' Langevin notation. Add the special symbol `xi` to an equation to introduce Gaussian white noise:
+
+```python
+G = NeuronGroup(10, 'dv/dt = -v/tau + sigma*sqrt(2/tau)*xi : volt')
+```
+
+`xi` has units of `1/sqrt(second)` so that the overall noise amplitude scales correctly regardless of the chosen timestep.
+
+<Note>
+If you need independent noise in **more than one equation** of the same `NeuronGroup` or `Synapses`, use suffixed names. `xi_1` used multiple times refers to the same noise process, while `xi_2` (or any other suffix like `xi_inh`, `xi_exc`) is an independent process. Using bare `xi` in two equations without a suffix raises an error.
+</Note>
+
+```python
+# Two independent noise sources in one NeuronGroup
+G = NeuronGroup(N, '''dv/dt = -v/tau + sigma_v * xi_v / sqrt(tau) : volt
+                       dw/dt = -w/tau + sigma_w * xi_w / sqrt(tau) : volt''')
+```
+
+## Refractoriness
+
+### Absolute refractory period
+
+Pass a time value to prevent threshold crossings for a fixed duration after each spike:
+
+```python
+G = NeuronGroup(10, 'dv/dt = -v/tau : volt',
+                threshold='v > -50*mV',
+                reset='v = -70*mV',
+                refractory=5*ms)
+```
+
+### Variable refractory period
+
+A string expression evaluated after each spike allows per-spike or per-neuron variability:
+
+```python
+# Random refractory period between 1 ms and 3 ms
+G = NeuronGroup(N, '...', threshold='...', reset='...',
+                refractory='(1 + 2*rand())*ms')
+
+# Per-neuron refractory period stored as a state variable
+G = NeuronGroup(N, '''...
+                       ref : second''',
+                threshold='...', reset='...',
+                refractory='ref')
+G.ref = np.random.uniform(1, 5, N) * ms
+```
+
+### Clamping variables during refractoriness
+
+By default, all state variables keep updating during the refractory period; only spike emission is suppressed. To also freeze a variable, mark it with `(unless refractory)`:
+
+```python
+G = NeuronGroup(N, '''dv/dt = -(v + w) / tau_v : 1 (unless refractory)
+                       dw/dt = -w / tau_w : 1''',
+                threshold='v > 1', reset='v=0; w+=0.1',
+                refractory=2*ms)
+```
+
+Here `v` is clamped at 0 for 2 ms after each spike, while the adaptation variable `w` keeps evolving. A clamped variable is also **read-only** during refractoriness: synaptic input to `v` is ignored until the neuron leaves its refractory period.
+
+### Condition-based refractoriness
+
+For Hodgkin-Huxley style models where spike counting requires a condition rather than a fixed interval:
+
+```python
+G = NeuronGroup(N, model='...', threshold='v > -20*mV',
+                refractory='v >= -20*mV')
+```
+
+The neuron stays refractory as long as the boolean condition remains `True`.
+
+## Parameters and Heterogeneous Populations
+
+Parameters are per-neuron variables you set explicitly. They are ideal for building heterogeneous populations:
+
+```python
+G = NeuronGroup(100, '''dv/dt = -v / tau : volt
+                         tau : second
+                         v_th : volt''',
+                threshold='v > v_th',
+                reset='v = -70*mV')
+
+# Uniform distribution of time constants 5–15 ms
+G.tau = '5*ms + rand() * 10*ms'
+
+# Neuron-specific thresholds
+G.v_th = np.random.normal(-55, 2, 100) * mV
+```
+
+Parameters can also be declared as `(constant)` (value does not change during a run) or `(shared)` (single value shared across all neurons):
+
+```python
+G = NeuronGroup(10, '''shared_input : volt (shared)
+                        dv/dt = (-v + shared_input) / tau : volt
+                        tau : second''')
+```
+
+## Subgroups
+
+Slice a `NeuronGroup` with Python's slice syntax to get a lightweight view of a subset of neurons:
+
+```python
+G = NeuronGroup(10, '''dv/dt = -v/tau : volt
+                        tau : second''',
+                threshold='v > -50*mV',
+                reset='v = -70*mV')
+
+G1 = G[:5]   # first 5 neurons
+G2 = G[5:]   # last 5 neurons
+
+G1.tau = 10 * ms
+G2.tau = 20 * ms
+```
+
+Subgroups are **views** into the parent group — setting `G1.tau` writes back into `G`. They can be used anywhere a full group is accepted: in `Synapses`, `StateMonitor`, `SpikeMonitor`, etc. Indices within the subgroup are relative to the subgroup, not the parent.
+
+```python
+# Single-neuron subgroup
+single = G[3]           # equivalent to G[3:4]
+
+# List indexing (must be equivalent to a contiguous slice)
+chunk = G[[2, 3, 4]]    # equivalent to G[2:5]
+```
+
+## Initializing State Variables
+
+State variables default to zero. Set them after construction using several convenient styles:
+
+<Steps>
+  <Step title="Scalar assignment">
+    ```python
+    G.v = -70 * mV     # all neurons get the same value
+    ```
+  </Step>
+  <Step title="Array assignment">
+    ```python
+    G.v = np.linspace(-80, -50, len(G)) * mV
+    ```
+  </Step>
+  <Step title="String expression">
+    Brian evaluates the string for every neuron; `i`, `N`, other state variables, and external names are all in scope:
+    ```python
+    G.tau = '5*ms + (1.0*i/N) * 5*ms'
+    # Results in tau values 5, 5.5, 6, ..., 9.5 ms for 10 neurons
+    ```
+  </Step>
+  <Step title="Conditional assignment">
+    ```python
+    G.v['tau > 7.25*ms'] = -60 * mV
+    ```
+  </Step>
+  <Step title="Random expression">
+    ```python
+    G.v = '-70*mV + rand()*20*mV'
+    ```
+  </Step>
+</Steps>
+
+## Storing and Loading State Variables
+
+`get_states` and `set_states` let you snapshot or restore all state variables at once:
+
+```python
+group = NeuronGroup(5, '''dv/dt = -v/tau : 1
+                           tau : second''')
+
+# Restore from a dictionary
+initial_values = {'v': [0, 1, 2, 3, 4],
+                  'tau': [10, 20, 10, 20, 10] * ms}
+group.set_states(initial_values)
+
+# Save all state variables
+states = group.get_states()
+print(states['v'])    # array([ 0.,  1.,  2.,  3.,  4.])
+```
+
+## Linked Variables
+
+A `NeuronGroup` variable can be declared as `(linked)` and then pointed at a variable in another group using `linked_var`. This is useful for, e.g., shared noise across cells:
+
+```python
+inp = NeuronGroup(1, 'dnoise/dt = -noise/tau + tau**-0.5*xi : 1')
+
+neurons = NeuronGroup(100, '''noise : 1 (linked)
+                               dv/dt = (-v + noise_strength*noise) / tau : volt''')
+neurons.noise = linked_var(inp, 'noise')
+```
+
+For groups of the same size, linking is 1-to-1. If the source is a single neuron or a shared variable, linking is 1-to-all. For arbitrary mappings, pass an explicit `index` array to `linked_var`.

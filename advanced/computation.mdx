@@ -1,0 +1,198 @@
+---
+title: "Code Generation and Performance in Brian2"
+sidebarTitle: "Computation"
+description: "Boost Brian2 simulation performance with Cython and C++ standalone code generation. Learn to set targets, configure compilers, and use the cpp_standalone device."
+---
+
+Brian2 supports several distinct computational backends that control how simulation work — numerical integration, synaptic propagation, threshold detection — is actually executed. The default **runtime** mode runs the simulation loop in Python while compiling the inner compute kernels to a faster target language automatically. For workloads where even that Python-level loop overhead matters, the **C++ standalone** mode generates a self-contained C++ project that is compiled and run entirely outside of Python, often delivering dramatic speed gains for smaller or highly connected networks.
+
+## Runtime Code Generation
+
+In runtime mode, Brian translates your model equations and statements into code in a target language, compiles it, and calls it from within the Python simulation loop. The target is selected via the `codegen.target` preference, which defaults to `'auto'`.
+
+With `'auto'`, Brian prefers `'cython'` (a compiled Cython/C++ extension) and falls back to `'numpy'` (pure Python/NumPy) with a warning if Cython or a C++ compiler is unavailable. You can pin the target explicitly at the top of your script:
+
+```python
+from brian2 import *
+
+# Use the pure-Python/NumPy fallback (no compiler required)
+prefs.codegen.target = 'numpy'
+
+# Or force Cython (requires Cython package + C++ compiler)
+prefs.codegen.target = 'cython'
+```
+
+<Tip>
+On Windows, make sure a compatible C++ compiler is installed to benefit from the `'cython'` target. Without it, Brian will silently use `'numpy'` and emit an informational warning.
+</Tip>
+
+### Cython Compilation Caching
+
+The first time Brian runs a simulation with the `'cython'` target it must compile the generated C++ code, which can make the initial run appear slower than the `'numpy'` target. Subsequent runs with identical code reuse the cached compiled objects from disk, so start-up time drops to near zero.
+
+If you run many simulations that each produce different generated code (for example, Brian's own test suite), the cache can grow large. Brian checks the cache size on every import against the `codegen.max_cache_dir_size` preference (default: 1 GB) and logs a message when the limit is exceeded. You can clear the cache manually or call:
+
+```python
+from brian2 import clear_cache
+clear_cache('cython')
+```
+
+## C++ Standalone Mode
+
+Standalone mode generates a complete C++ project tree for your model, compiles it, and runs it as a native binary. The Python script is only used to describe the network; all time-stepping happens in compiled C++. This is especially beneficial for networks with complex spike-propagation rules (such as STDP) or when the Python loop overhead per time step is significant.
+
+<Warning>
+Not all Brian features work in C++ standalone mode. Python-based `NetworkOperation` objects and some array-indexing syntax such as `S.w[0, :] = ...` will not function. Rewrite these using string-based syntax where possible. Standalone mode also only supports a **fixed** number of `run` calls — Python loops around multiple `run` calls will not produce the expected behaviour.
+</Warning>
+
+### Single `run` Call
+
+For scripts with a single `run` (or `Network.run`) call, simply add `set_device` after your imports:
+
+```python
+from brian2 import *
+
+set_device('cpp_standalone')
+
+group = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+group.v = 'rand()'
+mon = SpikeMonitor(group)
+run(1*second)
+# device.build() is called automatically after run()
+```
+
+Pass keyword arguments to `set_device` to customise the build:
+
+```python
+set_device('cpp_standalone', directory='my_output', debug=True)
+```
+
+### Multiple `run` Calls
+
+When your script contains several `run` calls, disable the automatic build and call `device.build()` explicitly after the last run:
+
+```python
+from brian2 import *
+
+set_device('cpp_standalone', build_on_run=False)
+
+group = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+run(500*ms)
+group.v = 0
+run(500*ms)
+
+device.build()   # compile and execute
+```
+
+### Multiple Full Simulation Runs
+
+After an initial `build`, you can reuse the compiled binary for additional runs without recompiling. This is ideal for parameter sweeps or stochastic simulations:
+
+```python
+from brian2 import *
+
+set_device('cpp_standalone', build_on_run=False)
+
+group = NeuronGroup(1, 'dv/dt = -v / (10*ms) : 1')
+group.v = 'rand()'
+mon = StateMonitor(group, 'v', record=0)
+run(100*ms)
+
+device.build(run=False)   # compile only, do not execute yet
+
+results = []
+for _ in range(10):
+    device.run()          # each call re-initialises and re-runs
+    results.append(mon.v[0])
+```
+
+To vary a parameter across runs, declare it as `(shared, constant)` in the equations and pass new values via `run_args`:
+
+```python
+from brian2 import *
+import numpy as np
+
+set_device('cpp_standalone', build_on_run=False)
+seed(111)
+
+group = NeuronGroup(10, '''dv/dt = -v / tau : 1
+                           tau : second (shared, constant)''')
+group.v = 'rand()'
+mon = StateMonitor(group, 'v', record=0)
+run(100*ms)
+device.build(run=False)
+
+results = []
+for tau_value in (np.arange(10) + 1) * 5 * ms:
+    device.run(run_args={group.tau: tau_value})
+    results.append(mon.v[:])
+```
+
+### Standalone Mode: Variables and Limitations
+
+<Warning>
+In standalone mode, code is only executed after `device.build()` / `device.run()`. This means you **cannot** read state variables back into Python between setup and the run. For example, `print(np.mean(neuron.v))` after a string-based initialisation will raise a `NotImplementedError`. Use string expressions for variable initialisation so that standalone code can evaluate them at run time.
+</Warning>
+
+Use string expressions for initialisation that depends on other variables:
+
+```python
+# Works in both runtime and standalone mode
+neuron = NeuronGroup(10, 'dv/dt = -g_L*(v - E_L)/tau : volt')
+neuron.E_L = '-70*mV + rand()*10*mV'
+neuron.v = 'E_L'   # evaluated during the run, when E_L is available
+```
+
+Similarly, when setting synaptic weights based on index ranges, prefer string-based conditions:
+
+```python
+synapses = Synapses(neurons, neurons, 'w : 1')
+synapses.connect(p=0.25)
+synapses.w['j < 5'] = 0.1
+synapses.w['j >= 5'] = 0.9
+```
+
+<Tip>
+Choose **runtime** mode for exploratory modelling, debugging, or when you need to mix Brian computations with arbitrary Python logic. Switch to **C++ standalone** for production runs of large or parameter-sweep simulations where compile-once / run-many performance matters.
+</Tip>
+
+## Compiler Settings
+
+When using C++ code generation — either via Cython in runtime mode or standalone — Brian applies a default set of optimisation flags that compile for the local CPU architecture. If you encounter issues (e.g. older compilers, cross-compilation targets), override with:
+
+```python
+from brian2 import *
+
+# Replace default extra compile arguments entirely
+prefs.codegen.cpp.extra_compile_args = ['-O2']
+
+# Or target a specific compiler only
+prefs.codegen.cpp.extra_compile_args_gcc = ['-O3', '-march=native']
+prefs.codegen.cpp.extra_compile_args_msvc = ['/O2']
+```
+
+## OpenMP Parallel Simulation
+
+C++ standalone mode supports multi-threaded execution via OpenMP when your compiler supports it. By default, one thread is used.
+
+<Warning>
+OpenMP support in Brian2 has not been exhaustively tested and results may occasionally differ from single-threaded runs. It works well for networks with time steps larger than roughly 0.1 ms.
+</Warning>
+
+Enable OpenMP by setting the number of threads before calling `run`:
+
+```python
+from brian2 import *
+
+set_device('cpp_standalone')
+prefs.devices.cpp_standalone.openmp_threads = 4
+
+group = NeuronGroup(10000, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+group.v = 'rand()'
+run(1*second)
+```
+
+The speedup depends strongly on the network topology; there is no guarantee of linear scaling with thread count.

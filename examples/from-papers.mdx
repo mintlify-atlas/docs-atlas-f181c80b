@@ -1,0 +1,680 @@
+---
+title: "Brian2 Models Reproduced from Published Neuroscience Papers"
+sidebarTitle: "From Papers"
+description: "Brian2 includes reproductions of published neural network models from Brunel 2000, Izhikevich 2003, Brette-Gerstner 2005, and Destexhe et al 1998."
+---
+
+One of the best ways to validate a simulator — and to learn how to use it — is to reproduce a well-known published model from scratch. Brian2's `examples/frompapers/` directory contains faithful re-implementations of landmark neuroscience papers, each producing figures that can be directly compared against the originals. The models span a wide range of biological detail: from abstract point-neuron network models to biophysically detailed multi-compartment thalamocortical cells. Every script listed here is self-contained and can be executed with a standard Brian2 installation.
+
+---
+
+## Brunel 2000 — Dynamics of Sparsely Connected Networks
+
+**Citation:** Brunel, N. (2000). *Dynamics of Sparsely Connected Networks of Excitatory and Inhibitory Spiking Neurons.* Journal of Computational Neuroscience, 8, 183–208. [https://doi.org/10.1023/A:1008925309027](https://doi.org/10.1023/A:1008925309027)
+
+<Note>
+This paper is one of the most-cited works in computational neuroscience and provides an analytical framework for understanding the full phase diagram of randomly connected E/I networks: synchronous regular (SR), synchronous irregular (SI), asynchronous regular (AR), and asynchronous irregular (AI) regimes.
+</Note>
+
+### Model overview
+
+The Brunel 2000 model consists of a large network of **leaky integrate-and-fire neurons** — 10 000 excitatory (80 %) and 2 500 inhibitory (20 %) — sparsely and randomly connected with probability ε = 0.1. An external Poisson drive models background cortical input. The key control parameters are:
+
+- **g** — the ratio of inhibitory to excitatory synaptic strength. When g > 1, inhibition is dominant.
+- **ν_ext / ν_thr** — the ratio of external input rate to the threshold firing rate. Higher values push the network toward faster, more synchronous firing.
+
+By sweeping these two parameters the simulation reproduces **Figure 8** of the original paper, showing four qualitatively different network states.
+
+### Key equations
+
+The membrane equation for each neuron is:
+
+```
+dv/dt = -v/tau   (unless refractory)
+```
+
+Excitatory synapses increment v by J; inhibitory synapses decrement v by g·J, both after a transmission delay D.
+
+### Brian2 implementation
+
+<Accordion title="Full Brunel 2000 source code">
+
+```python
+#!/usr/bin/env python3
+"""
+Fig. 8 from:
+
+Brunel, N. Dynamics of Sparsely Connected Networks of Excitatory and
+Inhibitory Spiking Neurons. J Comput Neurosci 8, 183–208
+(2000). https://doi.org/10.1023/A:1008925309027
+
+Inspired by http://neuronaldynamics.epfl.ch
+
+Sebastian Schmitt, 2022
+"""
+
+import random
+from brian2 import *
+import matplotlib.pyplot as plt
+
+
+def sim(g, nu_ext_over_nu_thr, sim_time, ax_spikes, ax_rates, rate_tick_step):
+    """
+    g -- relative inhibitory to excitatory synaptic strength
+    nu_ext_over_nu_thr -- ratio of external stimulus rate to threshold rate
+    sim_time -- simulation time
+    ax_spikes -- matplotlib axes to plot spikes on
+    ax_rates -- matplotlib axes to plot rates on
+    rate_tick_step -- step size for rate axis ticks
+    """
+
+    # network parameters
+    N_E = 10000
+    gamma = 0.25
+    N_I = round(gamma * N_E)
+    N = N_E + N_I
+    epsilon = 0.1
+    C_E = epsilon * N_E
+    C_ext = C_E
+
+    # neuron parameters
+    tau = 20 * ms
+    theta = 20 * mV
+    V_r = 10 * mV
+    tau_rp = 2 * ms
+
+    # synapse parameters
+    J = 0.1 * mV
+    D = 1.5 * ms
+
+    # external stimulus
+    nu_thr = theta / (J * C_E * tau)
+
+    defaultclock.dt = 0.1 * ms
+
+    neurons = NeuronGroup(N,
+                          """
+                          dv/dt = -v/tau : volt (unless refractory)
+                          """,
+                          threshold="v > theta",
+                          reset="v = V_r",
+                          refractory=tau_rp,
+                          method="exact",
+    )
+
+    excitatory_neurons = neurons[:N_E]
+    inhibitory_neurons = neurons[N_E:]
+
+    exc_synapses = Synapses(excitatory_neurons, target=neurons, on_pre="v += J", delay=D)
+    exc_synapses.connect(p=epsilon)
+
+    inhib_synapses = Synapses(inhibitory_neurons, target=neurons, on_pre="v += -g*J", delay=D)
+    inhib_synapses.connect(p=epsilon)
+
+    nu_ext = nu_ext_over_nu_thr * nu_thr
+
+    external_poisson_input = PoissonInput(
+        target=neurons, target_var="v", N=C_ext, rate=nu_ext, weight=J
+    )
+
+    rate_monitor = PopulationRateMonitor(neurons)
+
+    # record from the first 50 excitatory neurons
+    spike_monitor = SpikeMonitor(neurons[:50])
+
+    run(sim_time, report='text')
+
+    ax_spikes.plot(spike_monitor.t / ms, spike_monitor.i, "|")
+    ax_rates.plot(rate_monitor.t / ms, rate_monitor.rate / Hz)
+
+    ax_spikes.set_yticks([])
+
+    ax_spikes.set_xlim(*params["t_range"])
+    ax_rates.set_xlim(*params["t_range"])
+
+    ax_rates.set_ylim(*params["rate_range"])
+    ax_rates.set_xlabel("t [ms]")
+
+    ax_rates.set_yticks(
+        np.arange(
+            params["rate_range"][0], params["rate_range"][1] + rate_tick_step, rate_tick_step
+        )
+    )
+
+    plt.subplots_adjust(hspace=0)
+
+
+parameters = {
+    "A": {
+        "g": 3,
+        "nu_ext_over_nu_thr": 2,
+        "t_range": [500, 600],
+        "rate_range": [0, 6000],
+        "rate_tick_step": 1000,
+    },
+    "B": {
+        "g": 6,
+        "nu_ext_over_nu_thr": 4,
+        "t_range": [1000, 1200],
+        "rate_range": [0, 400],
+        "rate_tick_step": 100,
+    },
+    "C": {
+        "g": 5,
+        "nu_ext_over_nu_thr": 2,
+        "t_range": [1000, 1200],
+        "rate_range": [0, 200],
+        "rate_tick_step": 50,
+    },
+    "D": {
+        "g": 4.5,
+        "nu_ext_over_nu_thr": 0.9,
+        "t_range": [1000, 1200],
+        "rate_range": [0, 250],
+        "rate_tick_step": 50,
+    },
+}
+
+for panel, params in parameters.items():
+
+    fig = plt.figure(figsize=(4, 5))
+    fig.suptitle(panel)
+
+    gs = fig.add_gridspec(ncols=1, nrows=2, height_ratios=[4, 1])
+
+    ax_spikes, ax_rates = gs.subplots(sharex="col")
+
+    sim(
+        params["g"],
+        params["nu_ext_over_nu_thr"],
+        params["t_range"][1] * ms,
+        ax_spikes,
+        ax_rates,
+        params["rate_tick_step"],
+    )
+
+plt.show()
+```
+
+</Accordion>
+
+**What it produces:** Four separate figures labelled A–D, each showing a spike raster (top) and population firing rate (bottom) for a different combination of g and ν_ext/ν_thr. The four panels illustrate the synchronous regular (A), asynchronous irregular (B/C), and slow oscillatory (D) regimes described in the paper.
+
+---
+
+## Izhikevich 2003 — Simple Model of Spiking Neurons
+
+**Citation:** Izhikevich, E. M. (2003). *Simple Model of Spiking Neurons.* IEEE Transactions on Neural Networks, 14(6), 1569–1572.
+
+<Note>
+Izhikevich showed that just four parameters (a, b, c, d) can reproduce over 20 distinct electrophysiological neuron types — from regular spiking and fast spiking cortical cells to bursting and chattering neurons — at a computational cost comparable to the LIF model.
+</Note>
+
+### Model overview
+
+The Izhikevich model uses two coupled dimensionless ODEs:
+
+```
+dv/dt = 0.04*v² + 5*v + 140 - u + I
+du/dt = a*(b*v - u)
+```
+
+with reset conditions `v = c; u += d` whenever v ≥ 30. The Brian2 reproduction of Figure 3 from the paper runs a mixed network of 800 excitatory and 200 inhibitory neurons with heterogeneous parameters drawn from random distributions, reproducing the characteristic asynchronous irregular cortical firing pattern.
+
+### Key model parameters
+
+| Population | a | b | c | d |
+|---|---|---|---|---|
+| Excitatory | 0.02 | 0.2 | −65 + 15r² | 8 − 6r² |
+| Inhibitory | 0.02 + 0.08r | 0.25 − 0.05r | −65 | 2 |
+
+where r is drawn from a uniform distribution, introducing biological variability.
+
+<Accordion title="Full Izhikevich 2003 source code">
+
+```python
+#!/usr/bin/env python3
+"""
+Fig. 3 of
+
+Simple Model of Spiking Neurons
+IEEE Transactions on Neural Networks ( Volume: 14, Issue: 6, Nov. 2003)
+Eugene M. Izhikevich
+
+based on net.m by Eugene M. Izhikevich (http://izhikevich.org/publications/spikes.htm)
+
+Akif Erdem Sağtekin and Sebastian Schmitt, 2022
+"""
+import matplotlib.pyplot as plt
+import numpy as np
+
+from brian2 import NeuronGroup, Synapses, SpikeMonitor, StateMonitor
+from brian2 import ms, mV
+from brian2 import defaultclock, run
+
+tfinal = 1000 * ms
+Ne = 800
+Ni = 200
+
+re = np.random.uniform(size=Ne)
+ri = np.random.uniform(size=Ni)
+weights = np.hstack(
+    [
+        0.5 * np.random.uniform(size=(Ne + Ni, Ne)),
+        -np.random.uniform(size=(Ne + Ni, Ni)),
+    ]
+).T
+
+defaultclock.dt = 1 * ms
+
+eqs = """dv/dt = (0.04*v**2 + 5*v + 140 - u + I + I_noise )/ms : 1
+         du/dt = (a*(b*v - u))/ms  : 1
+         I : 1
+         I_noise : 1
+         a : 1
+         b : 1
+         c : 1
+         d : 1
+       """
+
+N = NeuronGroup(Ne + Ni, eqs, threshold="v>=30", reset="v=c; u+=d", method="euler")
+N.v = -65
+
+N_exc = N[:Ne]
+N_inh = N[Ne:]
+
+spikemon = SpikeMonitor(N)
+statemon = StateMonitor(N, 'v', record=0, when='after_thresholds')
+N_exc.a = 0.02
+N_exc.b = 0.2
+N_exc.c = -65 + 15 * re**2
+N_exc.d = 8 - 6 * re**2
+
+N_inh.a = 0.02 + 0.08 * ri
+N_inh.b = 0.25 - 0.05 * ri
+N_inh.c = -65
+N_inh.d = 2
+
+N_exc.u = "b*v"
+N_inh.u = "b*v"
+
+S = Synapses(
+    N,
+    N,
+    "w : 1",
+    on_pre={"up": "I += w", "down": "I -= w"},
+    delay={"up": 0 * ms, "down": 1 * ms},
+)
+S.connect()
+S.w[:] = weights.flatten()
+
+N_exc.run_regularly("I_noise = 5*randn()", dt=1 * ms)
+N_inh.run_regularly("I_noise = 2*randn()", dt=1 * ms)
+
+run(tfinal)
+
+fig, (ax, ax_voltage) = plt.subplots(2, 1, sharex=True,
+                                     gridspec_kw={'height_ratios': (3, 1)})
+
+ax.scatter(spikemon.t / ms, spikemon.i[:], marker="_", color="k", s=10)
+ax.set_xlim(0, tfinal / ms)
+ax.set_ylim(0, len(N))
+ax.set_ylabel("neuron number")
+ax.set_yticks(np.arange(0, len(N), 100))
+ax.spines['right'].set_visible(False)
+ax.spines['top'].set_visible(False)
+ax.axhline(Ne, color="k")
+ax.text(500, 900, 'inhibitory', backgroundcolor='w', color='k', ha='center')
+ax.text(500, 400, 'excitatory', backgroundcolor='w', color='k', ha='center')
+
+ax_voltage.plot(statemon.t / ms, np.clip(statemon.v[0], -np.inf, 30),
+               color='k')
+ax_voltage.text(25, 0, 'v₁(t)')
+ax_voltage.set_xticks(np.arange(0, tfinal / ms, 100))
+ax_voltage.spines['right'].set_visible(False)
+ax_voltage.spines['top'].set_visible(False)
+ax_voltage.set_xlabel("time, ms")
+
+plt.show()
+```
+
+</Accordion>
+
+**What it produces:** Two vertically stacked panels: (1) a spike raster showing all 1 000 neurons over 1 000 ms, with a horizontal line separating the excitatory (bottom) and inhibitory (top) populations; (2) the membrane-voltage trace v₁(t) for the first excitatory neuron.
+
+<Tip>
+The `on_pre` dictionary syntax `{"up": "I += w", "down": "I -= w"}` with `delay={"up": 0*ms, "down": 1*ms}` implements a precise 1 ms synaptic current pulse in Brian2 by applying a positive increment immediately and subtracting it 1 ms later.
+</Tip>
+
+---
+
+## Brette & Gerstner 2005 — Adaptive Exponential Integrate-and-Fire
+
+**Citation:** Brette, R. & Gerstner, W. (2005). *Adaptive Exponential Integrate-and-Fire Model as an Effective Description of Neuronal Activity.* Journal of Neurophysiology, 94, 3637–3642.
+
+<Note>
+The AdEx model extends the standard exponential integrate-and-fire model with a subthreshold adaptation current w. By adjusting just four parameters (τ_w, a, b, V_r) it can reproduce regular spiking, intrinsic bursting, and fast-spiking phenotypes without changing the core equations.
+</Note>
+
+### Model overview
+
+The **Adaptive Exponential Integrate-and-Fire (AdEx)** model adds two biophysical features missing from a plain LIF model:
+
+1. **Exponential spike initiation:** A term `g_L · ΔT · exp((V − V_T) / ΔT)` captures the sharp voltage upswing caused by Na⁺ channel activation near threshold.
+2. **Adaptation current w:** A slow outward current that increments by b on each spike and otherwise follows a first-order ODE toward a sub-threshold activation target.
+
+The two differential equations are:
+
+```
+dvm/dt = (gL*(EL - vm) + gL*DeltaT*exp((vm - VT)/DeltaT) + I - w) / C
+dw/dt  = (a*(vm - EL) - w) / tauw
+```
+
+with reset `vm = Vr; w += b` whenever vm exceeds the cutoff `Vcut = VT + 5·ΔT`.
+
+### Brian2 implementation
+
+```python
+#!/usr/bin/env python
+"""
+Adaptive exponential integrate-and-fire model.
+
+http://www.scholarpedia.org/article/Adaptive_exponential_integrate-and-fire_model
+
+Introduced in Brette R. and Gerstner W. (2005), Adaptive Exponential
+Integrate-and-Fire Model as an Effective Description of Neuronal Activity,
+J. Neurophysiol. 94: 3637 - 3642.
+"""
+from brian2 import *
+
+# Parameters
+C = 281 * pF
+gL = 30 * nS
+taum = C / gL
+EL = -70.6 * mV
+VT = -50.4 * mV
+DeltaT = 2 * mV
+Vcut = VT + 5 * DeltaT
+
+# Pick an electrophysiological behaviour
+tauw, a, b, Vr = 144*ms, 4*nS, 0.0805*nA, -70.6*mV # Regular spiking (as in the paper)
+#tauw,a,b,Vr=20*ms,4*nS,0.5*nA,VT+5*mV # Bursting
+#tauw,a,b,Vr=144*ms,2*C/(144*ms),0*nA,-70.6*mV # Fast spiking
+
+eqs = """
+dvm/dt = (gL*(EL - vm) + gL*DeltaT*exp((vm - VT)/DeltaT) + I - w)/C : volt
+dw/dt = (a*(vm - EL) - w)/tauw : amp
+I : amp
+"""
+
+neuron = NeuronGroup(1, model=eqs, threshold='vm>Vcut',
+                     reset="vm=Vr; w+=b", method='euler')
+neuron.vm = EL
+trace = StateMonitor(neuron, 'vm', record=0)
+spikes = SpikeMonitor(neuron)
+
+run(20 * ms)
+neuron.I = 1*nA
+run(100 * ms)
+neuron.I = 0*nA
+run(20 * ms)
+
+# We draw nicer spikes
+vm = trace[0].vm[:]
+for t in spikes.t:
+    i = int(t / defaultclock.dt)
+    vm[i] = 20*mV
+
+plot(trace.t / ms, vm / mV)
+xlabel('time (ms)')
+ylabel('membrane potential (mV)')
+show()
+```
+
+**What it produces:** A membrane-voltage trace over a 140 ms window. During the central 100 ms a 1 nA current step is applied; the neuron fires a series of action potentials that gradually slow due to the adaptation current w — the hallmark **regular spiking** pattern. Spikes are rendered at 20 mV for visual clarity since the true voltage soars past Vcut.
+
+<Tip>
+To switch between spiking phenotypes, simply uncomment one of the alternative `(tauw, a, b, Vr)` parameter lines. No other code changes are needed — the model equations remain identical.
+</Tip>
+
+---
+
+## Destexhe et al. 1998 — Thalamocortical Relay Cell with Low-Threshold Calcium Current
+
+**Citation:** Destexhe, A., Neubig, M., Ulrich, D. & Huguenard, J. (1998). *Dendritic Low-Threshold Calcium Currents in Thalamic Relay Cells.* Journal of Neuroscience, 18(10), 3574–3588.
+
+<Note>
+The original NEURON code is available on ModelDB at [https://senselab.med.yale.edu/modeldb/ShowModel.cshtml?model=279](https://senselab.med.yale.edu/modeldb/ShowModel.cshtml?model=279). The morphology is a biocytin-stained rat VB (ventrobasal) thalamocortical neuron archived at NeuroMorpho.Org (NMO_00881).
+</Note>
+
+### Model overview
+
+This is a **multi-compartment spatial neuron** model that reproduces Figure 12 of Destexhe et al. 1998. The model captures the **low-threshold calcium spike (LTS)** — a burst of action potentials triggered by hyperpolarisation-activated de-inactivation of T-type Ca²⁺ channels — which is critical for thalamocortical oscillations (sleep spindles, delta waves).
+
+The morphology is a simplified three-compartment representation of a rat thalamocortical relay cell:
+
+<Steps>
+  <Step title="Soma (main)">
+    A 38.42 µm cylinder (diameter 26 µm) carrying Na⁺/K⁺ Hodgkin-Huxley currents for spike initiation plus the T-type Ca²⁺ current I_T.
+  </Step>
+  <Step title="Proximal dendrite (dend)">
+    A 12.49 µm cylinder (diameter 10.28 µm) connecting soma to distal dendrite.
+  </Step>
+  <Step title="Distal dendrite (dend.distal)">
+    An 84.67 µm cylinder (diameter 8.5 µm) carrying additional I_T current, the main site of dendritic Ca²⁺ channel expression in thalamic relay cells.
+  </Step>
+</Steps>
+
+### Key currents
+
+The model includes four transmembrane currents:
+
+| Current | Description |
+|---|---|
+| `gl*(El-v)` | Passive leak conductance |
+| `I_Na = g_Na * m³ * h * (v − E_Na)` | Fast transient Na⁺ (HH-type, spike initiation) |
+| `I_K = g_K * n⁴ * (v − E_K)` | Delayed-rectifier K⁺ (HH-type, repolarisation) |
+| `I_T = P_Ca * m_T² * h_T * G_Ca` | Low-threshold T-type Ca²⁺ (rebound bursting) |
+
+The Ca²⁺ current uses the **Goldman-Hodgkin-Katz (GHK) formalism** via the driving force `G_Ca`, which accounts for the nonlinear concentration gradient across the membrane:
+
+```python
+G_Ca = Z_Ca**2*F*v*gamma*(Ca_i - Ca_o*exp(-Z_Ca*gamma*v))/(1 - exp(-Z_Ca*gamma*v))
+```
+
+Temperature corrections are applied via `tadj_HH` (for Na⁺/K⁺, recorded at 36 °C) and `tadj_m_T`, `tadj_h_T` (for I_T, recorded at 24 °C), scaling to the simulation temperature of 34 °C.
+
+<Accordion title="Full Destexhe et al. 1998 source code">
+
+```python
+"""
+Reproduces Figure 12 (simplified three-compartment model) from the following
+paper:
+
+Dendritic Low-Threshold Calcium Currents in Thalamic Relay Cells
+Alain Destexhe, Mike Neubig, Daniel Ulrich, John Huguenard
+Journal of Neuroscience 15 May 1998, 18 (10) 3574-3588
+
+The original NEURON code is available on ModelDB:
+https://senselab.med.yale.edu/modeldb/ShowModel.cshtml?model=279
+"""
+
+from brian2 import *
+from brian2.units.constants import (zero_celsius, faraday_constant as F,
+                                    gas_constant as R)
+
+defaultclock.dt = 0.01*ms
+
+VT = -52*mV
+El = -76.5*mV  # from code, text says: -69.85*mV
+
+E_Na = 50*mV
+E_K = -100*mV
+C_d = 7.954  # dendritic correction factor
+
+T = 34*kelvin + zero_celsius # 34 degC (current-clamp experiments)
+tadj_HH = 3.0**((34-36)/10.0)  # temperature adjustment for Na & K (original recordings at 36 degC)
+tadj_m_T = 2.5**((34-24)/10.0)
+tadj_h_T = 2.5**((34-24)/10.0)
+
+shift_I_T = -1*mV
+
+gamma = F/(R*T)  # R=gas constant, F=Faraday constant
+Z_Ca = 2  # Valence of Calcium ions
+Ca_i = 240*nM  # intracellular Calcium concentration
+Ca_o = 2*mM  # extracellular Calcium concentration
+
+eqs = Equations('''
+Im = gl*(El-v) - I_Na - I_K - I_T: amp/meter**2
+I_inj : amp (point current)
+gl : siemens/meter**2
+
+# HH-type currents for spike initiation
+g_Na : siemens/meter**2
+g_K : siemens/meter**2
+I_Na = g_Na * m**3 * h * (v-E_Na) : amp/meter**2
+I_K = g_K * n**4 * (v-E_K) : amp/meter**2
+v2 = v - VT : volt  # shifted membrane potential (Traub convention)
+dm/dt = (0.32*(mV**-1)*(13.*mV-v2)/
+        (exp((13.*mV-v2)/(4.*mV))-1.)*(1-m)-0.28*(mV**-1)*(v2-40.*mV)/
+        (exp((v2-40.*mV)/(5.*mV))-1.)*m) / ms * tadj_HH: 1
+dn/dt = (0.032*(mV**-1)*(15.*mV-v2)/
+        (exp((15.*mV-v2)/(5.*mV))-1.)*(1.-n)-.5*exp((10.*mV-v2)/(40.*mV))*n) / ms * tadj_HH: 1
+dh/dt = (0.128*exp((17.*mV-v2)/(18.*mV))*(1.-h)-4./(1+exp((40.*mV-v2)/(5.*mV)))*h) / ms * tadj_HH: 1
+
+# Low-threshold Calcium current (I_T)  -- nonlinear function of voltage
+I_T = P_Ca * m_T**2*h_T * G_Ca : amp/meter**2
+P_Ca : meter/second  # maximum Permeability to Calcium
+G_Ca = Z_Ca**2*F*v*gamma*(Ca_i - Ca_o*exp(-Z_Ca*gamma*v))/(1 - exp(-Z_Ca*gamma*v)) : coulomb/meter**3
+dm_T/dt = -(m_T - m_T_inf)/tau_m_T : 1
+dh_T/dt = -(h_T - h_T_inf)/tau_h_T : 1
+m_T_inf = 1/(1 + exp(-(v/mV + 56)/6.2)) : 1
+h_T_inf = 1/(1 + exp((v/mV + 80)/4)) : 1
+tau_m_T = (0.612 + 1.0/(exp(-(v/mV + 131)/16.7) + exp((v/mV + 15.8)/18.2))) * ms / tadj_m_T: second
+tau_h_T = (int(v<-81*mV) * exp((v/mV + 466)/66.6) +
+           int(v>=-81*mV) * (28 + exp(-(v/mV + 21)/10.5))) * ms / tadj_h_T: second
+''')
+
+# Simplified three-compartment morphology
+morpho = Cylinder(x=[0, 38.42]*um, diameter=26*um)
+morpho.dend = Cylinder(x=[0, 12.49]*um, diameter=10.28*um)
+morpho.dend.distal = Cylinder(x=[0, 84.67]*um, diameter=8.5*um)
+neuron = SpatialNeuron(morpho, eqs, Cm=0.88*uF/cm**2, Ri=173*ohm*cm,
+                       method='exponential_euler')
+
+neuron.v = -74*mV
+# Only the soma has Na/K channels
+neuron.main.g_Na = 100*msiemens/cm**2
+neuron.main.g_K = 100*msiemens/cm**2
+# Apply the correction factor to the dendrites
+neuron.dend.Cm *= C_d
+neuron.m_T = 'm_T_inf'
+neuron.h_T = 'h_T_inf'
+
+mon = StateMonitor(neuron, ['v'], record=True)
+
+store('initial state')
+
+
+def do_experiment(currents, somatic_density, dendritic_density,
+                  dendritic_conductance=0.0379*msiemens/cm**2,
+                  HH_currents=True):
+    restore('initial state')
+    voltages = []
+    neuron.P_Ca = somatic_density
+    neuron.dend.distal.P_Ca = dendritic_density * C_d
+    # dendritic conductance (shunting conductance used for Fig 12C)
+    neuron.gl = dendritic_conductance
+    neuron.dend.gl = dendritic_conductance * C_d
+    if not HH_currents:
+        # Shut off spiking (for Figures 12B and 12C)
+        neuron.g_Na = 0*msiemens/cm**2
+        neuron.g_K = 0*msiemens/cm**2
+    run(180*ms)
+    store('before current')
+    for current in currents:
+        restore('before current')
+        neuron.main.I_inj = current
+        print('.', end='')
+        run(320*ms)
+        voltages.append(mon[morpho].v[:])  # somatic voltage
+    return voltages
+
+
+## Run the various variants of the model to reproduce Figure 12
+mpl.rcParams['lines.markersize'] = 3.0
+fig, axes = plt.subplots(2, 2)
+print('Running experiments for Figure A1 ', end='')
+voltages = do_experiment([50, 75]*pA, somatic_density=1.7e-5*cm/second,
+                         dendritic_density=1.7e-5*cm/second)
+print(' done.')
+cut_off = 100*ms  # Do not display first part of simulation
+axes[0, 0].plot((mon.t - cut_off) / ms, voltages[0] / mV, color='gray')
+axes[0, 0].plot((mon.t - cut_off) / ms, voltages[1] / mV, color='black')
+axes[0, 0].set(xlim=(0, 400), ylim=(-80, 40), xticks=[],
+               title='A1: Uniform T-current density', ylabel='Voltage (mV)')
+
+print('Running experiments for Figure A2 ', end='')
+voltages = do_experiment([50, 75]*pA, somatic_density=1.7e-5*cm/second,
+                         dendritic_density=9.5e-5*cm/second)
+print(' done.')
+axes[1, 0].plot((mon.t - cut_off) / ms, voltages[0] / mV, color='gray')
+axes[1, 0].plot((mon.t - cut_off) / ms, voltages[1] / mV, color='black')
+axes[1, 0].set(xlim=(0, 400), ylim=(-80, 40),
+               title='A2: High T-current density in dendrites',
+               xlabel='Time (ms)', ylabel='Voltage (mV)')
+
+print('Running experiments for Figure B ', end='')
+currents = np.linspace(0, 200, 41)*pA
+voltages_somatic = do_experiment(currents, somatic_density=56.36e-5*cm/second,
+                                 dendritic_density=0*cm/second,
+                                 HH_currents=False)
+voltages_somatic_dendritic = do_experiment(currents, somatic_density=1.7e-5*cm/second,
+                                           dendritic_density=9.5e-5*cm/second,
+                                           HH_currents=False)
+print(' done.')
+maxima_somatic = Quantity(voltages_somatic).max(axis=1)
+maxima_somatic_dendritic = Quantity(voltages_somatic_dendritic).max(axis=1)
+axes[0, 1].plot(currents/pA, maxima_somatic/mV, 'o-', color='black', label='Somatic only')
+axes[0, 1].plot(currents/pA, maxima_somatic_dendritic/mV, 's-', color='black',
+                label='Somatic & dendritic')
+axes[0, 1].set(xlabel='Injected current (pA)', ylabel='Peak LTS (mV)', ylim=(-80, 0))
+axes[0, 1].legend(loc='best', frameon=False)
+
+print('Running experiments for Figure C ', end='')
+currents = np.linspace(200, 400, 41)*pA
+voltages_somatic = do_experiment(currents, somatic_density=56.36e-5*cm/second,
+                                 dendritic_density=0*cm/second,
+                                 dendritic_conductance=0.15*msiemens/cm**2,
+                                 HH_currents=False)
+voltages_somatic_dendritic = do_experiment(currents, somatic_density=1.7e-5*cm/second,
+                                           dendritic_density=9.5e-5*cm/second,
+                                           dendritic_conductance=0.15*msiemens/cm**2,
+                                           HH_currents=False)
+print(' done.')
+maxima_somatic = Quantity(voltages_somatic).max(axis=1)
+maxima_somatic_dendritic = Quantity(voltages_somatic_dendritic).max(axis=1)
+axes[1, 1].plot(currents/pA, maxima_somatic/mV, 'o-', color='black', label='Somatic only')
+axes[1, 1].plot(currents/pA, maxima_somatic_dendritic/mV, 's-', color='black',
+                label='Somatic & dendritic')
+axes[1, 1].set(xlabel='Injected current (pA)', ylabel='Peak LTS (mV)', ylim=(-80, 0))
+axes[1, 1].legend(loc='best', frameon=False)
+
+plt.tight_layout()
+plt.show()
+```
+
+</Accordion>
+
+**What it produces:** A 2×2 grid of panels reproducing Figure 12 of the paper:
+
+| Panel | Description |
+|---|---|
+| A1 | Somatic voltage for 50 pA and 75 pA input with uniform T-current density across the cell. |
+| A2 | Same currents but with high T-current density concentrated in the distal dendrite — reveals dendritic amplification of the LTS. |
+| B | Peak LTS amplitude vs. injected current for somatic-only vs. combined somatic+dendritic T-current distributions (Na⁺/K⁺ channels disabled). |
+| C | Same as B but with dendritic shunting conductances present, reproducing the reduced LTS amplitude seen experimentally. |
+
+<Warning>
+This simulation uses `defaultclock.dt = 0.01*ms` and runs dozens of separate 500 ms experiments. Total wall-clock time is several minutes on a standard laptop. The `store()` / `restore()` pattern is used to reset the neuron to equilibrium before each current injection without re-building the model.
+</Warning>

@@ -1,0 +1,217 @@
+---
+title: "Custom Events in Brian2 Beyond Spike Thresholds"
+sidebarTitle: "Custom Events"
+description: "Define custom events in Brian2 for non-spike threshold crossings. Trigger synaptic pathways, monitors, and run_on_event actions from any neuron state variable."
+---
+
+In most Brian2 simulations, the `threshold` argument of `NeuronGroup` defines a single event — a **spike** — that drives synaptic transmission, monitors, and reset logic. But many biologically realistic models need to respond to other kinds of threshold crossings: an intracellular calcium concentration exceeding a threshold, a slow potassium current crossing zero, or any state variable hitting a critical value. Brian2's custom event system lets you define arbitrarily many named events on a `NeuronGroup`, each of which can independently trigger synaptic pathways, `EventMonitor` recordings, and groups of reset-like statements.
+
+## The Default `spike` Event
+
+Before examining custom events, it helps to understand what the default `spike` event actually does under the hood.
+
+<Note>
+When you specify `threshold='...'` and `reset='...'` in a `NeuronGroup`, Brian automatically creates a single event named `spike`. This event:
+
+1. Checks the threshold condition each time step.
+2. Executes the reset statements for neurons where the condition was true.
+3. Triggers the `pre` pathway of any presynaptic `Synapses` object and the `post` pathway of any postsynaptic one.
+4. Is recorded by any `SpikeMonitor` attached to the group.
+
+All of these behaviours can be replicated and extended for custom events.
+</Note>
+
+## Defining Custom Events
+
+Custom events are declared via the `events` keyword argument to `NeuronGroup`. Each key is the event name and each value is the threshold condition string:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100,
+    '''dv/dt = (I - v) / (10*ms) : 1
+       dCa/dt = -Ca / (100*ms) + 0.1 * v : 1
+       I : 1''',
+    threshold='v > 1',
+    reset='v = 0',
+    events={'calcium_event': 'Ca > 0.5'})
+```
+
+Any number of custom events can be declared in the dictionary.
+
+## Triggering Reset-Like Statements with `run_on_event`
+
+Use `NeuronGroup.run_on_event` to execute a statement whenever a custom event fires — this is exactly what `reset='...'` does for the `spike` event:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100,
+    '''dv/dt = (I - v) / (10*ms) : 1
+       dCa/dt = -Ca / (100*ms) + 0.1 * v : 1
+       I : 1''',
+    threshold='v > 1',
+    reset='v = 0',
+    events={'calcium_event': 'Ca > 0.5'})
+
+# Reset calcium to baseline whenever the calcium event fires
+group.run_on_event('calcium_event', 'Ca = 0')
+```
+
+## Event-Driven Synaptic Pathways
+
+By default, the `pre` pathway of a `Synapses` object is triggered by `spike` events on the presynaptic group. You can redirect any pathway to a custom event using the `on_event` keyword:
+
+<Tabs>
+  <Tab title="All pathways to a custom event">
+    ```python
+    from brian2 import *
+
+    pre_group = NeuronGroup(50,
+        '''dv/dt = -v/(10*ms) : 1
+           dCa/dt = -Ca/(100*ms) + v : 1''',
+        threshold='v > 1', reset='v = 0',
+        events={'calcium_event': 'Ca > 0.3'})
+
+    post_group = NeuronGroup(50, 'dv/dt = -v/(10*ms) : 1')
+
+    # The entire pre pathway is now triggered by calcium_event, not spike
+    syn = Synapses(pre_group, post_group, 'w : 1',
+                   on_pre='v_post += w',
+                   on_event='calcium_event')
+    syn.connect(j='i')
+    syn.w = 0.5
+    ```
+  </Tab>
+  <Tab title="Per-pathway event routing">
+    ```python
+    from brian2 import *
+
+    pre_group = NeuronGroup(50,
+        '''dv/dt = -v/(10*ms) : 1
+           dCa/dt = -Ca/(100*ms) + v : 1''',
+        threshold='v > 1', reset='v = 0',
+        events={'calcium_event': 'Ca > 0.3'})
+
+    post_group = NeuronGroup(50, 'dv/dt = -v/(10*ms) : 1')
+
+    # Only the 'pre' pathway uses the custom event;
+    # 'post' keeps the default 'spike' trigger
+    syn = Synapses(pre_group, post_group, 'w : 1',
+                   on_pre='v_post += w',
+                   on_post='w *= 0.99',
+                   on_event={'pre': 'calcium_event'})
+    syn.connect(j='i')
+    syn.w = 0.5
+    ```
+  </Tab>
+  <Tab title="Custom pathway names">
+    ```python
+    from brian2 import *
+
+    pre_group = NeuronGroup(50,
+        '''dv/dt = -v/(10*ms) : 1
+           dCa/dt = -Ca/(100*ms) + v : 1''',
+        threshold='v > 1', reset='v = 0',
+        events={'calcium_event': 'Ca > 0.3'})
+
+    post_group = NeuronGroup(50, 'dv/dt = -v/(10*ms) : 1')
+
+    # Standard pre pathway on spike; new 'ca_pathway' on calcium_event
+    syn = Synapses(pre_group, post_group, 'w : 1',
+                   on_pre={'pre': 'v_post += w',
+                            'ca_pathway': 'w *= 1.01'},
+                   on_event={'pre': 'spike',
+                              'ca_pathway': 'calcium_event'})
+    syn.connect(j='i')
+    syn.w = 0.1
+    ```
+  </Tab>
+</Tabs>
+
+## Monitoring Custom Events with `EventMonitor`
+
+`EventMonitor` records event times and neuron indices, exactly like `SpikeMonitor` (which is just an `EventMonitor` bound to the `spike` event). You can also record the values of additional state variables at the moment the event fires:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(100,
+    '''dv/dt = (I - v) / (10*ms) : 1
+       dCa/dt = -Ca / (100*ms) + 0.1 * v : 1
+       I : 1''',
+    threshold='v > 1',
+    reset='v = 0',
+    events={'calcium_event': 'Ca > 0.5'})
+group.run_on_event('calcium_event', 'Ca = 0')
+group.I = 1.5
+
+# Record event times, neuron indices, and the value of v at each event
+ca_mon = EventMonitor(group, 'calcium_event', variables=['v', 'Ca'])
+spike_mon = SpikeMonitor(group)
+
+run(500*ms)
+
+print(f"Calcium events: {ca_mon.count.sum()}")
+print(f"Spikes:         {spike_mon.num_spikes}")
+# Access recorded variables
+print(f"v at Ca events: {ca_mon.v[:5]}")
+```
+
+## Scheduling Custom Events
+
+By default, custom event conditions are checked **after** the spike threshold (in the `after_thresholds` slot), and their associated statements run **after** the spike reset (in the `after_resets` slot). You can change these assignments using `NeuronGroup.set_event_schedule` for the condition check, and by passing `when`/`order` to `run_on_event`:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(50,
+    '''dv/dt = -v/(10*ms) : 1
+       dCa/dt = -Ca/(100*ms) + v : 1''',
+    threshold='v > 1', reset='v = 0',
+    events={'calcium_event': 'Ca > 0.3'})
+
+# Move the condition check to run during 'thresholds' instead of 'after_thresholds'
+group.set_event_schedule('calcium_event', when='thresholds', order=1)
+
+# Move the reset-like statement to run during 'resets'
+group.run_on_event('calcium_event', 'Ca = 0', when='resets', order=1)
+```
+
+## Complete Example: Calcium Threshold Dynamics
+
+The following example assembles all the pieces: a network where spikes drive voltage and calcium dynamics, calcium events reset calcium and potentiate synaptic weights via a dedicated pathway, and both event types are monitored independently.
+
+```python
+from brian2 import *
+
+N = 200
+
+neurons = NeuronGroup(N,
+    '''dv/dt = (I - v) / (5*ms) : 1
+       dCa/dt = -Ca / (80*ms) + 0.2 * v : 1
+       I : 1''',
+    threshold='v > 1',
+    reset='v = 0',
+    events={'ca_burst': 'Ca > 0.4'})
+
+neurons.run_on_event('ca_burst', 'Ca = 0')
+neurons.I = '0.8 + rand() * 0.5'
+
+syn = Synapses(neurons, neurons, 'w : 1',
+               on_pre={'pre': 'v_post += w * 0.1',
+                        'potentiation': 'w = clip(w + 0.01, 0, 1)'},
+               on_event={'pre': 'spike',
+                          'potentiation': 'ca_burst'})
+syn.connect(condition='i != j', p=0.05)
+syn.w = 0.2
+
+spike_mon = SpikeMonitor(neurons)
+ca_mon    = EventMonitor(neurons, 'ca_burst')
+v_mon     = StateMonitor(neurons, ['v', 'Ca'], record=[0, 1, 2])
+
+run(200*ms)
+
+print(f"Total spikes:         {spike_mon.num_spikes}")
+print(f"Total calcium bursts: {ca_mon.count.sum()}")
+```

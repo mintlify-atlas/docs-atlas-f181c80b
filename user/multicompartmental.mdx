@@ -1,0 +1,361 @@
+---
+title: "Multicompartmental Neurons with SpatialNeuron in Brian2"
+sidebarTitle: "Multicompartmental"
+description: "Model morphologically detailed neurons in Brian2 using SpatialNeuron. Define compartment geometry with Soma, Cylinder, and Section morphology objects."
+---
+
+Brian2's `SpatialNeuron` class lets you build spatially extended neuron models in which each compartment has its own membrane potential, governed by cable theory. A `SpatialNeuron` is essentially a `NeuronGroup` where each element is a compartment rather than an independent neuron. Electrical coupling between compartments is handled automatically based on the specified morphology and intracellular resistivity. This page explains how to construct morphologies, create a `SpatialNeuron`, access and manipulate compartments, and connect synaptic inputs.
+
+---
+
+## Creating morphologies
+
+Brian2 provides three primitive objects for building neuron morphologies: `Soma`, `Cylinder`, and `Section`. These can be combined into arbitrarily branching trees by attaching child sections as attributes of a parent section.
+
+### Soma
+
+`Soma` creates a single iso-potential spherical compartment. Its membrane area is calculated from the sphere formula for the given diameter:
+
+```python
+from brian2 import *
+
+soma = Soma(diameter=30*um)
+```
+
+### Cylinder
+
+`Cylinder` creates a section of `n` compartments of equal length and diameter:
+
+```python
+from brian2 import *
+
+# 10 compartments, each 10 µm long, all with diameter 1 µm
+axon = Cylinder(diameter=1*um, length=100*um, n=10)
+```
+
+### Section
+
+`Section` gives full control over the geometry: you specify the diameter at each node (n+1 values for n compartments) and the length of each compartment (n values). Individual compartments are modelled as truncated cones:
+
+```python
+from brian2 import *
+
+# 5 compartments with tapering diameter
+section = Section(diameter=[6, 5, 4, 3, 2, 1]*um,
+                  length=[10, 10, 10, 5, 5]*um,
+                  n=5)
+```
+
+<Note>
+For `Section`, the `diameter` argument specifies diameters **at the nodes between compartments** (and at the endpoints), not at the compartment centres. The `diameter` attribute of the resulting morphology object returns the diameter at the midpoint of each compartment. The node values can be retrieved via `start_diameter` and `end_diameter`. For `Cylinder`, all three (`start_diameter`, `diameter`, `end_diameter`) are identical.
+</Note>
+
+### Connecting morphology components
+
+Attach sections to a parent section by assigning them as attributes. The name you choose is arbitrary (except for the reserved single-character shortcuts `L`, `R`, and `1`–`9`):
+
+```python
+from brian2 import *
+
+morpho = Soma(diameter=30*um)
+morpho.axon     = Cylinder(length=100*um, diameter=1*um, n=10)
+morpho.dendrite = Cylinder(length=50*um,  diameter=2*um, n=5)
+
+# Add branches to the dendrite
+morpho.dendrite.branch1 = Cylinder(length=50*um, diameter=1*um, n=3)
+morpho.dendrite.branch2 = Cylinder(length=50*um, diameter=1*um, n=3)
+```
+
+You can also use dictionary-style indexing:
+
+```python
+morpho['dendrite']['branch1'] = Cylinder(length=50*um, diameter=1*um, n=3)
+```
+
+### Short-syntax tree building
+
+Names consisting of a single digit (`1`–`9`) or the letters `L` / `R` can be chained directly without dots, allowing compact navigation and construction:
+
+```python
+from brian2 import *
+
+morpho = Soma(diameter=30*um)
+morpho.L  = Cylinder(length=10*um, diameter=1*um, n=3)
+morpho.L1 = Cylinder(length=5*um,  diameter=1*um, n=3)
+morpho.L2 = Cylinder(length=5*um,  diameter=1*um, n=3)
+morpho.L3 = Cylinder(length=5*um,  diameter=1*um, n=3)
+morpho.R  = Cylinder(length=10*um, diameter=1*um, n=3)
+morpho.RL = Cylinder(length=5*um,  diameter=1*um, n=3)
+morpho.RR = Cylinder(length=5*um,  diameter=1*um, n=3)
+
+morpho.topology()
+```
+
+The `topology()` call prints the branching structure:
+
+```
+( )  [root]
+   `---|  .L
+        `---|  .L.1
+        `---|  .L.2
+        `---|  .L.3
+   `---|  .R
+        `---|  .R.L
+        `---|  .R.R
+```
+
+### Loading from SWC files
+
+Morphologies stored in the standard SWC format (e.g., from [NeuroMorpho.org](http://neuromorpho.org)) can be loaded directly:
+
+```python
+from brian2 import *
+
+morpho = Morphology.from_file('corticalcell.swc')
+```
+
+---
+
+## Creating a SpatialNeuron
+
+A `SpatialNeuron` requires a morphology and a set of equations that define the transmembrane current `Im` (in units of current per area, A/m²). Optionally specify the specific membrane capacitance `Cm` and intracellular resistivity `Ri`:
+
+```python
+from brian2 import *
+
+# Build a simple soma + axon morphology
+morpho = Soma(diameter=30*um)
+morpho.axon = Cylinder(length=300*um, diameter=1*um, n=100)
+
+# Passive leak current
+gL = 1e-4 * siemens/cm**2
+EL = -70 * mV
+
+eqs = '''
+Im = gL * (EL - v) : amp/meter**2
+I : amp (point current)
+'''
+
+neuron = SpatialNeuron(morphology=morpho, model=eqs,
+                       Cm=1*uF/cm**2, Ri=100*ohm*cm)
+neuron.v = EL + 10*mV  # set initial membrane potential for all compartments
+```
+
+Brian2 automatically creates state variables for all geometric quantities: `length`, `diameter`, `area`, `volume`, `distance` (from soma), and — for morphologies with coordinates — `x`, `y`, `z`. The membrane potential is stored in `v`.
+
+The `Im` line is mandatory: it expresses the total transmembrane current density. The rest of the equations follow the same syntax as a `NeuronGroup`.
+
+### Point currents (electrodes and synapses)
+
+To inject a current at a single compartment (e.g., via an electrode), declare it with the `(point current)` flag. Brian2 automatically divides the current by the compartment area when adding it to `Im`:
+
+```python
+neuron.I[0] = 1 * nA   # inject 1 nA into compartment 0 (typically the soma)
+```
+
+---
+
+## Accessing compartments
+
+### Accessing subtrees by attribute
+
+Subtrees are accessed using the same attribute names used when building the morphology. State variable assignments apply to the **entire subtree**, including all branches:
+
+```python
+# Set gNa on the axon and all its branches
+neuron.axon.gNa = 10 * gL
+
+# To restrict to the main section only (not its child branches):
+neuron.axon.main.gNa = 10 * gL
+```
+
+### Injecting current at the soma
+
+A common pattern is to inject current only at the soma. Use the `main` attribute to target the root section specifically:
+
+```python
+neuron.main.I = 1 * nA
+```
+
+### Slicing compartments
+
+You can access a contiguous range of compartments using slices by index or by distance from the soma:
+
+```python
+# First three compartments by index
+first_three = neuron[:3]
+
+# Compartments between 10 µm and 50 µm from the root
+initial_segment = neuron.axon[10*um:50*um]
+```
+
+For non-contiguous selections, use the morphology's `indices` attribute:
+
+```python
+axon_view = neuron[morpho.axon.indices[:]]
+# or equivalently:
+axon_view = neuron[morpho.axon]
+```
+
+---
+
+## Hodgkin-Huxley style channel example
+
+The following example places HH-type sodium and potassium channels in the axon while keeping the soma passive. Spikes are detected at compartment 30 of the axon:
+
+```python
+from brian2 import *
+
+morpho = Soma(diameter=30*um)
+morpho.axon = Cylinder(length=500*um, diameter=1*um, n=200)
+
+gL   = 1e-4  * siemens/cm**2
+gNa  = 0.12  * siemens/cm**2
+gK   = 0.036 * siemens/cm**2
+EL   = -54.387 * mV
+ENa  = 50     * mV
+EK   = -77    * mV
+
+eqs = '''
+Im = gL*(EL - v) + gNa_here*m**3*h*(ENa - v) + gK_here*n**4*(EK - v) : amp/meter**2
+dm/dt = alpham*(1-m) - betam*m : 1
+dh/dt = alphah*(1-h) - betah*h : 1
+dn/dt = alphan*(1-n) - betan*n  : 1
+alpham = (0.1/mV) * (-v + 25*mV) / (exp((-v+25*mV)/(10*mV)) - 1)/ms : Hz
+betam  = 4*exp(-v/(18*mV))/ms : Hz
+alphah = 0.07*exp(-v/(20*mV))/ms : Hz
+betah  = 1/(exp((-v+30*mV)/(10*mV)) + 1)/ms : Hz
+alphan = (0.01/mV)*(-v+10*mV)/(exp((-v+10*mV)/(10*mV)) - 1)/ms : Hz
+betan  = 0.125*exp(-v/(80*mV))/ms : Hz
+gNa_here : siemens/meter**2
+gK_here  : siemens/meter**2
+I : amp (point current)
+'''
+
+neuron = SpatialNeuron(morphology=morpho, model=eqs,
+                       Cm=1*uF/cm**2, Ri=35.4*ohm*cm,
+                       threshold='m > 0.5',
+                       threshold_location=morpho.axon[30*um],
+                       refractory='m > 0.4')
+
+# Channels only in the axon
+neuron.axon.gNa_here = gNa
+neuron.axon.gK_here  = gK
+
+# Initial conditions
+neuron.v = EL
+neuron.m = 0.05
+neuron.h = 0.60
+neuron.n = 0.32
+
+# Inject current at the soma
+neuron.main.I = 1 * nA
+
+spike_mon = SpikeMonitor(neuron)
+state_mon = StateMonitor(neuron, 'v', record=True)
+
+run(30 * ms)
+
+import matplotlib.pyplot as plt
+plt.figure(figsize=(10, 4))
+plt.plot(state_mon.t / ms, state_mon.v[0] / mV, label='soma')
+plt.plot(state_mon.t / ms, state_mon.v[50] / mV, label='axon mid')
+plt.xlabel('Time (ms)')
+plt.ylabel('Membrane potential (mV)')
+plt.legend()
+plt.show()
+```
+
+---
+
+## Connecting to synapses
+
+### Method 1: synaptic equations inside SpatialNeuron
+
+Include the synaptic conductance directly in the neuron model, declared as a `(point current)`:
+
+```python
+from brian2 import *
+
+morpho = Soma(diameter=30*um)
+morpho.axon = Cylinder(length=200*um, diameter=1*um, n=50)
+
+gL = 1e-4 * siemens/cm**2
+EL = -70 * mV
+Es = 0  * mV
+taus = 5 * ms
+
+eqs = '''
+Im = gL * (EL - v) : amp/meter**2
+Is = gs * (Es - v) : amp (point current)
+dgs/dt = -gs / taus : siemens
+'''
+
+neuron = SpatialNeuron(morphology=morpho, model=eqs,
+                       Cm=1*uF/cm**2, Ri=100*ohm*cm)
+neuron.v = EL
+
+# Stimulation group
+stim = SpikeGeneratorGroup(2, [0, 1], [5, 15]*ms)
+
+S = Synapses(stim, neuron, on_pre='gs += 1*nS')
+# Connect to compartments by spatial position
+S.connect(i=0, j=morpho[25*um])     # synapse at 25 µm from soma
+S.connect(i=1, j=morpho.axon[30*um])
+
+run(50 * ms)
+```
+
+### Method 2: synaptic equations in Synapses (for multiple synapses per compartment)
+
+When several synapses target the same compartment and the synaptic equations are nonlinear, keep the conductance per synapse in the `Synapses` object and sum them into the compartmental variable using the `(summed)` flag:
+
+```python
+from brian2 import *
+
+morpho = Soma(diameter=30*um)
+morpho.axon = Cylinder(length=200*um, diameter=1*um, n=50)
+
+gL  = 1e-4 * siemens/cm**2
+EL  = -70  * mV
+Es  = 0    * mV
+taus = 5   * ms
+
+eqs = '''
+Im = gL * (EL - v) : amp/meter**2
+Is = gs * (Es - v) : amp (point current)
+gs : siemens
+'''
+
+neuron = SpatialNeuron(morphology=morpho, model=eqs,
+                       Cm=1*uF/cm**2, Ri=100*ohm*cm)
+neuron.v = EL
+
+stim = SpikeGeneratorGroup(3, [0, 1, 2], [5, 10, 15]*ms)
+
+S = Synapses(stim, neuron,
+             model='''dg/dt = -g / taus : siemens
+                      gs_post = g : siemens (summed)''',
+             on_pre='g += 1*nS')
+S.connect(i=[0, 1, 2], j=[morpho[25*um], morpho[25*um], morpho.axon[30*um]])
+
+run(50 * ms)
+```
+
+### Detecting spikes in a SpatialNeuron
+
+Spike detection works exactly as in `NeuronGroup`. Use `threshold_location` to restrict detection to a single compartment (e.g., the axon initial segment):
+
+```python
+neuron = SpatialNeuron(morphology=morpho, model=eqs,
+                       Cm=1*uF/cm**2, Ri=100*ohm*cm,
+                       threshold='v > 0*mV',
+                       refractory='v > -10*mV')
+
+# Detect only at a specific location
+neuron_with_ais = SpatialNeuron(morphology=morpho, model=eqs,
+                                Cm=1*uF/cm**2, Ri=100*ohm*cm,
+                                threshold='v > 0*mV',
+                                threshold_location=morpho.axon[30*um],
+                                refractory='v > -10*mV')
+```

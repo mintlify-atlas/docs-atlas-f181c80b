@@ -1,0 +1,410 @@
+---
+title: "Brian2 Example Simulations and Network Models"
+sidebarTitle: "Overview"
+description: "Explore Brian2 example simulations: balanced random networks, Hodgkin-Huxley neurons, STDP plasticity, gap junctions, and adaptive threshold models."
+---
+
+Brian2 ships with a rich collection of ready-to-run example scripts that cover the most commonly used neuroscience models — from simple leaky integrate-and-fire (LIF) neurons up to biophysically detailed Hodgkin-Huxley networks. Each example is a single self-contained Python file that you can execute directly after installing Brian2. The examples below are grouped by topic and include the full source code, a description of the underlying biological model, and a summary of the plots produced.
+
+<CardGroup cols={2}>
+  <Card title="Standard Examples" icon="flask" href="#standard-examples">
+    Balanced networks, F-I curves, adaptive thresholds, STDP, and gap junctions
+  </Card>
+  <Card title="From Papers" icon="book-open" href="/examples/from-papers">
+    Reproductions of landmark neuroscience models from peer-reviewed publications
+  </Card>
+</CardGroup>
+
+---
+
+## Standard Examples
+
+### CUBA — Current-Based Balanced Network
+
+The **CUBA** (Current-Based synapses) benchmark implements a random network of 4 000 integrate-and-fire neurons — 3 200 excitatory and 800 inhibitory — connected with sparse random excitatory and inhibitory synapses. Synaptic input is modelled as an additive current (voltage-based exponential currents), making this a current-based network. This is Benchmark 2 from the landmark simulator-comparison paper by Brette et al. (2007) and is the most frequently cited starting point for evaluating spiking-network simulators.
+
+Biologically, the model captures the **balanced excitatory/inhibitory regime** seen in cortical circuits: inhibitory feedback prevents runaway excitation while maintaining asynchronous irregular firing, a hallmark of in-vivo cortical activity.
+
+<Accordion title="Full CUBA source code">
+
+```python
+"""
+This is a Brian script implementing a benchmark described
+in the following review paper:
+
+Simulation of networks of spiking neurons: A review of tools and strategies
+(2007). Brette, Rudolph, Carnevale, Hines, Beeman, Bower, Diesmann, Goodman,
+Harris, Zirpe, Natschlager, Pecevski, Ermentrout, Djurfeldt, Lansner, Rochel,
+Vibert, Alvarez, Muller, Davison, El Boustani and Destexhe.
+Journal of Computational Neuroscience 23(3):349-98
+
+Benchmark 2: random network of integrate-and-fire neurons with exponential
+synaptic currents.
+
+Clock-driven implementation with exact subthreshold integration
+(but spike times are aligned to the grid).
+"""
+from brian2 import *
+
+taum = 20*ms
+taue = 5*ms
+taui = 10*ms
+Vt = -50*mV
+Vr = -60*mV
+El = -49*mV
+
+eqs = '''
+dv/dt  = (ge+gi-(v-El))/taum : volt (unless refractory)
+dge/dt = -ge/taue : volt
+dgi/dt = -gi/taui : volt
+'''
+
+P = NeuronGroup(4000, eqs, threshold='v>Vt', reset='v = Vr', refractory=5*ms,
+                method='exact')
+P.v = 'Vr + rand() * (Vt - Vr)'
+P.ge = 0*mV
+P.gi = 0*mV
+
+we = (60*0.27/10)*mV # excitatory synaptic weight (voltage)
+wi = (-20*4.5/10)*mV # inhibitory synaptic weight
+Ce = Synapses(P, P, on_pre='ge += we')
+Ci = Synapses(P, P, on_pre='gi += wi')
+Ce.connect('i<3200', p=0.02)
+Ci.connect('i>=3200', p=0.02)
+
+s_mon = SpikeMonitor(P)
+
+run(1 * second)
+
+plot(s_mon.t/ms, s_mon.i, ',k')
+xlabel('Time (ms)')
+ylabel('Neuron index')
+show()
+```
+
+</Accordion>
+
+**What it produces:** A raster plot of spike times vs. neuron index over 1 second of simulated time. In the balanced regime the raster appears sparse and irregular — neurons fire asynchronously at low rates rather than in synchronised bursts.
+
+<Tip>
+The `method='exact'` argument selects Brian2's exact linear integration for the subthreshold membrane equation, which gives analytical accuracy between spikes without requiring a very small time step.
+</Tip>
+
+---
+
+### COBAHH — Conductance-Based Network with Hodgkin-Huxley Neurons
+
+The **COBAHH** (Conductance-Based with Hodgkin-Huxley dynamics) benchmark is Benchmark 3 from the same Brette et al. (2007) review. It uses the same 4 000-neuron, sparse random connectivity structure as CUBA but replaces the simple LIF membrane with **full Hodgkin-Huxley kinetics**, including fast sodium (Na⁺) and delayed-rectifier potassium (K⁺) channels. Synapses are conductance-based: excitatory synapses open conductances that drive the membrane toward 0 mV, and inhibitory synapses drive it toward −80 mV, which is more biologically realistic than additive current injection.
+
+<Accordion title="Full COBAHH source code">
+
+```python
+#!/usr/bin/env python
+# -*- coding: UTF-8 -*-
+"""
+Benchmark 3: random network of HH neurons with exponential synaptic conductances
+
+Clock-driven implementation (no spike time interpolation)
+
+R. Brette - Dec 2007
+"""
+
+from brian2 import *
+
+# Parameters
+area = 20000*umetre**2
+Cm = (1*ufarad*cm**-2) * area
+gl = (5e-5*siemens*cm**-2) * area
+
+El = -60*mV
+EK = -90*mV
+ENa = 50*mV
+g_na = (100*msiemens*cm**-2) * area
+g_kd = (30*msiemens*cm**-2) * area
+VT = -63*mV
+# Time constants
+taue = 5*ms
+taui = 10*ms
+# Reversal potentials
+Ee = 0*mV
+Ei = -80*mV
+we = 6*nS  # excitatory synaptic weight
+wi = 67*nS  # inhibitory synaptic weight
+
+# The model
+eqs = Equations('''
+dv/dt = (gl*(El-v)+ge*(Ee-v)+gi*(Ei-v)-
+         g_na*(m*m*m)*h*(v-ENa)-
+         g_kd*(n*n*n*n)*(v-EK))/Cm : volt
+dm/dt = alpha_m*(1-m)-beta_m*m : 1
+dn/dt = alpha_n*(1-n)-beta_n*n : 1
+dh/dt = alpha_h*(1-h)-beta_h*h : 1
+dge/dt = -ge*(1./taue) : siemens
+dgi/dt = -gi*(1./taui) : siemens
+alpha_m = 0.32*(mV**-1)*4*mV/exprel((13*mV-v+VT)/(4*mV))/ms : Hz
+beta_m = 0.28*(mV**-1)*5*mV/exprel((v-VT-40*mV)/(5*mV))/ms : Hz
+alpha_h = 0.128*exp((17*mV-v+VT)/(18*mV))/ms : Hz
+beta_h = 4./(1+exp((40*mV-v+VT)/(5*mV)))/ms : Hz
+alpha_n = 0.032*(mV**-1)*5*mV/exprel((15*mV-v+VT)/(5*mV))/ms : Hz
+beta_n = .5*exp((10*mV-v+VT)/(40*mV))/ms : Hz
+''')
+
+P = NeuronGroup(4000, model=eqs, threshold='v>-20*mV', refractory=3*ms,
+                method='exponential_euler')
+Pe = P[:3200]
+Pi = P[3200:]
+Ce = Synapses(Pe, P, on_pre='ge+=we')
+Ci = Synapses(Pi, P, on_pre='gi+=wi')
+Ce.connect(p=0.02)
+Ci.connect(p=0.02)
+
+# Initialization
+P.v = 'El + (randn() * 5 - 5)*mV'
+P.ge = '(randn() * 1.5 + 4) * 10.*nS'
+P.gi = '(randn() * 12 + 20) * 10.*nS'
+
+# Record a few traces
+trace = StateMonitor(P, 'v', record=[1, 10, 100])
+run(1 * second, report='text')
+plot(trace.t/ms, trace[1].v/mV)
+plot(trace.t/ms, trace[10].v/mV)
+plot(trace.t/ms, trace[100].v/mV)
+xlabel('t (ms)')
+ylabel('v (mV)')
+show()
+```
+
+</Accordion>
+
+**What it produces:** Overlaid membrane-voltage traces for three neurons over 1 second, showing the characteristic sharp action-potential waveform of Hodgkin-Huxley dynamics rather than the instantaneous reset of a LIF model.
+
+<Note>
+The `exprel` function — Brian2's version of `(exp(x)-1)/x` — is used in the alpha/beta gating-variable rate equations to avoid numerical instabilities near zero voltage.
+</Note>
+
+---
+
+### IF\_curve\_LIF — F-I Curve for Leaky Integrate-and-Fire
+
+The **input-frequency (F-I) curve** describes how a neuron's firing rate changes as a function of injected current (or, here, input drive voltage `v0`). Understanding this curve is fundamental to neural coding: it tells us how a single neuron converts graded input into a spike-rate output. This example uses 1 000 independent LIF neurons, each driven by a different constant input `v0`, and records spike counts over one second to estimate firing rate.
+
+```python
+#!/usr/bin/env python
+"""
+Input-Frequency curve of a IF model.
+
+Network: 1000 unconnected integrate-and-fire neurons (leaky IF)
+with an input parameter v0.
+The input is set differently for each neuron.
+"""
+from brian2 import *
+
+n = 1000
+duration = 1*second
+tau = 10*ms
+eqs = '''
+dv/dt = (v0 - v) / tau : volt (unless refractory)
+v0 : volt
+'''
+group = NeuronGroup(n, eqs, threshold='v > 10*mV', reset='v = 0*mV',
+                    refractory=5*ms, method='exact')
+group.v = 0*mV
+group.v0 = '20*mV * i / (n-1)'
+
+monitor = SpikeMonitor(group)
+
+run(duration)
+plot(group.v0/mV, monitor.count / duration)
+xlabel('v0 (mV)')
+ylabel('Firing rate (sp/s)')
+show()
+```
+
+**What it produces:** A plot of steady-state firing rate (spikes/second) as a function of the drive parameter `v0` (mV). The curve is zero below threshold and rises monotonically above it, forming the classic sigmoidal-to-linear shape of a LIF F-I curve.
+
+<Tip>
+By setting `group.v0 = '20*mV * i / (n-1)'`, Brian2 assigns a linearly spaced range of drive values to all 1 000 neurons in a single vectorised statement — no Python loop required.
+</Tip>
+
+---
+
+### Adaptive Threshold — Spike-Frequency Adaptation
+
+Many real neurons show **spike-frequency adaptation**: the threshold for firing increases with each spike, so the neuron fires rapidly at stimulus onset then slows down even if the input is maintained. This example implements that behaviour with two coupled ODEs — one for the membrane voltage `v` and one for the adaptive threshold `vt`. A `PoissonGroup` provides a stochastic excitatory drive.
+
+```python
+"""
+A model with adaptive threshold (increases with each spike)
+"""
+from brian2 import *
+
+eqs = '''
+dv/dt = -v/(10*ms) : volt
+dvt/dt = (10*mV-vt)/(15*ms) : volt
+'''
+
+reset = '''
+v = 0*mV
+vt += 3*mV
+'''
+
+IF = NeuronGroup(1, model=eqs, reset=reset, threshold='v>vt',
+                 method='exact')
+IF.vt = 10*mV
+PG = PoissonGroup(1, 500 * Hz)
+
+C = Synapses(PG, IF, on_pre='v += 3*mV')
+C.connect()
+
+Mv = StateMonitor(IF, 'v', record=True)
+Mvt = StateMonitor(IF, 'vt', record=True)
+# Record the value of v when the threshold is crossed
+M_crossings = SpikeMonitor(IF, variables='v')
+run(2*second, report='text')
+
+subplot(1, 2, 1)
+plot(Mv.t / ms, Mv[0].v / mV)
+plot(Mvt.t / ms, Mvt[0].vt / mV)
+ylabel('v (mV)')
+xlabel('t (ms)')
+# zoom in on the first 100ms
+xlim(0, 100)
+subplot(1, 2, 2)
+hist(M_crossings.v / mV, bins=np.arange(10, 20, 0.5))
+xlabel('v at threshold crossing (mV)')
+show()
+```
+
+**What it produces:** Two panels:
+1. Membrane voltage `v` and adaptive threshold `vt` over the first 100 ms — showing how `vt` jumps up on each spike and then decays back toward 10 mV.
+2. A histogram of the voltage values at which the threshold was crossed, illustrating the distribution of threshold levels encountered during 2 seconds of Poisson-driven activity.
+
+---
+
+### STDP — Spike-Timing Dependent Plasticity
+
+**Spike-timing dependent plasticity (STDP)** is a Hebbian learning rule in which a synapse is potentiated when a presynaptic spike precedes a postsynaptic spike (within a time window) and depressed in the reverse order. This example reproduces the model of Song, Miller & Abbott (2000) and Song & Abbott (2001): 1 000 Poisson-input neurons project to a single LIF neuron, and all synaptic weights evolve according to the STDP rule. After 100 seconds of simulation the weight distribution shifts from uniform towards a bimodal structure — strong synapses and weak synapses — a signature of competitive, Hebbian refinement.
+
+<Accordion title="Full STDP source code">
+
+```python
+#!/usr/bin/env python
+"""
+Spike-timing dependent plasticity
+
+Adapted from Song, Miller and Abbott (2000) and Song and Abbott (2001)
+"""
+from brian2 import *
+
+N = 1000
+taum = 10*ms
+taupre = 20*ms
+taupost = taupre
+Ee = 0*mV
+vt = -54*mV
+vr = -60*mV
+El = -74*mV
+taue = 5*ms
+F = 15*Hz
+gmax = .01
+dApre = .01
+dApost = -dApre * taupre / taupost * 1.05
+dApost *= gmax
+dApre *= gmax
+
+eqs_neurons = '''
+dv/dt = (ge * (Ee-v) + El - v) / taum : volt
+dge/dt = -ge / taue : 1
+'''
+
+poisson_input = PoissonGroup(N, rates=F)
+neurons = NeuronGroup(1, eqs_neurons, threshold='v>vt', reset='v = vr',
+                      method='euler')
+S = Synapses(poisson_input, neurons,
+             '''w : 1
+                dApre/dt = -Apre / taupre : 1 (event-driven)
+                dApost/dt = -Apost / taupost : 1 (event-driven)''',
+             on_pre='''ge += w
+                    Apre += dApre
+                    w = clip(w + Apost, 0, gmax)''',
+             on_post='''Apost += dApost
+                     w = clip(w + Apre, 0, gmax)''',
+             )
+S.connect()
+S.w = 'rand() * gmax'
+mon = StateMonitor(S, 'w', record=[0, 1])
+s_mon = SpikeMonitor(poisson_input)
+
+run(100*second, report='text')
+
+subplot(311)
+plot(S.w / gmax, '.k')
+ylabel('Weight / gmax')
+xlabel('Synapse index')
+subplot(312)
+hist(S.w / gmax, 20)
+xlabel('Weight / gmax')
+subplot(313)
+plot(mon.t/second, mon.w.T/gmax)
+xlabel('Time (s)')
+ylabel('Weight / gmax')
+tight_layout()
+show()
+```
+
+</Accordion>
+
+**What it produces:** Three panels showing: (1) final synaptic weights per synapse index, (2) the weight histogram revealing bimodal structure, and (3) the time-evolution of weights for two example synapses over the full 100-second simulation.
+
+<Note>
+The `(event-driven)` flag on `Apre` and `Apost` tells Brian2 to integrate those variables only at spike events rather than on every time step, which significantly speeds up simulations with large numbers of plastic synapses.
+</Note>
+
+---
+
+### Gap Junctions — Electrical Synapses
+
+Unlike chemical synapses, **gap junctions** (electrical synapses) connect neurons directly through pores that allow current to flow bidirectionally. The gap-junction current is proportional to the voltage difference between coupled cells, so neurons tend to synchronise their membrane potentials. This example models 10 leaky neurons with all-to-all gap-junction connectivity using Brian2's `(summed)` synapse variables.
+
+```python
+#!/usr/bin/env python
+"""
+Neurons with gap junctions.
+"""
+from brian2 import *
+
+n = 10
+v0 = 1.05
+tau = 10*ms
+
+eqs = '''
+dv/dt = (v0 - v + Igap) / tau : 1
+Igap : 1 # gap junction current
+'''
+
+neurons = NeuronGroup(n, eqs, threshold='v > 1', reset='v = 0',
+                      method='exact')
+neurons.v = 'i * 1.0 / (n-1)'
+trace = StateMonitor(neurons, 'v', record=[0, 5])
+
+S = Synapses(neurons, neurons, '''
+             w : 1 # gap junction conductance
+             Igap_post = w * (v_pre - v_post) : 1 (summed)
+             ''')
+S.connect()
+S.w = .02
+
+run(500*ms)
+
+plot(trace.t/ms, trace[0].v)
+plot(trace.t/ms, trace[5].v)
+xlabel('Time (ms)')
+ylabel('v')
+show()
+```
+
+**What it produces:** Two overlaid membrane-voltage traces for neurons 0 and 5, illustrating how gap-junction coupling progressively synchronises the two neurons' spiking patterns over 500 ms.
+
+<Tip>
+The `Igap_post = w * (v_pre - v_post) : 1 (summed)` synapse equation uses Brian2's `(summed)` mechanism to accumulate contributions from all presynaptic partners into a single postsynaptic variable — exactly the sum required for gap-junction current.
+</Tip>

@@ -1,0 +1,267 @@
+---
+title: "Synapses API Reference — Brian2 Synaptic Connection Class"
+sidebarTitle: "Synapses"
+description: "Complete API reference for Brian2's Synapses class. Parameters for synaptic models, connect() method, on_pre/on_post code, delays, and synaptic variable access."
+---
+
+`Synapses` is the class that implements synaptic connections between two groups (or from a group back to itself). It supports a rich set of features: per-synapse state variables with their own differential equations, pre- and post-synaptic spike-triggered code (`on_pre` / `on_post`), heterogeneous transmission delays, event-driven or clock-driven integration, and summed post-synaptic variables. Synaptic connections are created lazily — the constructor defines the model, but actual connections are only formed when `connect()` is called.
+
+## Constructor
+
+```python
+Synapses(
+    source,
+    target=None,
+    model=None,
+    on_pre=None,
+    on_post=None,
+    delay=None,
+    on_event="spike",
+    multisynaptic_index=None,
+    namespace=None,
+    dtype=None,
+    dt=None,
+    clock=None,
+    order=0,
+    method=("exact", "euler", "heun"),
+    name="synapses*",
+)
+```
+
+### Parameters
+
+<ParamField path="source" type="NeuronGroup | SpikeSource" required>
+  The pre-synaptic group whose spikes will drive the `on_pre` pathway. Must
+  be a `SpikeSource` with a `clock` attribute.
+</ParamField>
+
+<ParamField path="target" type="Group" optional>
+  The post-synaptic group that receives input from the `on_post` pathway. If
+  not provided, `source` is used as both source and target (recurrent
+  connections).
+</ParamField>
+
+<ParamField path="model" type="str | Equations" optional>
+  Synaptic variable declarations and optional differential equations. Supports
+  the flags `(event-driven)`, `(clock-driven)`, `(summed)`, `(shared)`, and
+  `(constant)`. Reserved names `i`, `j`, and `delay` may not be used as
+  variable names.
+
+  ```
+  model = """
+  dw/dt = -w / tau_w : 1 (clock-driven)
+  """
+  ```
+</ParamField>
+
+<ParamField path="on_pre" type="str | dict" optional>
+  Code executed after every pre-synaptic spike arrives at each synapse. When a
+  single string is given, the pathway is named `pre` and accessible as
+  `S.pre`. When a dict is provided, each key becomes a named pathway with its
+  own code string and its own independently settable delay.
+
+  ```python
+  on_pre="v_post += w"
+  # or multiple pathways:
+  on_pre={"exc": "v_post += w", "inh": "v_post -= w"}
+  ```
+</ParamField>
+
+<ParamField path="on_post" type="str | dict" optional>
+  Code executed after every post-synaptic spike. Follows the same conventions
+  as `on_pre`; the default pathway name is `post`.
+</ParamField>
+
+<ParamField path="delay" type="Quantity | dict" optional>
+  A scalar transmission delay for the `pre` pathway, or a dict mapping pathway
+  names to scalar delays. A scalar delay is stored as a single value (not
+  per-synapse), and can still be read/written via `S.delay` or
+  `S.pre.delay`. For per-synapse heterogeneous delays, omit this argument and
+  assign `S.delay` after calling `connect()`.
+</ParamField>
+
+<ParamField path="on_event" type="str | dict" default='"spike"'>
+  The name of the event that triggers the `pre` and `post` pathways. Defaults
+  to `"spike"`. A dict can map individual pathway names to different events.
+</ParamField>
+
+<ParamField path="multisynaptic_index" type="str" optional>
+  Name of an integer variable that will be automatically created and populated
+  with a synapse-number index (enumerating multiple connections between the
+  same source–target pair). Required for 3-index access `S[i, j, k]`. Omit
+  when each pair has at most one synapse to avoid the memory overhead.
+</ParamField>
+
+<ParamField path="namespace" type="dict" optional>
+  A dictionary mapping identifier names to Python objects. Resolved at run
+  time from the local/global scope if not provided.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Time step for the synaptic state update. Mutually exclusive with `clock`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  An explicit `Clock` for the synaptic state update. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Scheduling priority within a time step slot.
+</ParamField>
+
+<ParamField path="method" type="str | tuple | StateUpdateMethod" default='("exact", "euler", "heun")'>
+  Numerical integration method for synaptic differential equations. The same
+  options as in `NeuronGroup` apply.
+</ParamField>
+
+<ParamField path="name" type="str" default='"synapses*"'>
+  Unique name for the object. The `*` causes auto-numbering to prevent
+  collisions.
+</ParamField>
+
+---
+
+## `connect()` Method
+
+Creates actual synaptic connections. Must be called at least once before the
+simulation runs (otherwise Brian2 raises a `TypeError`).
+
+```python
+Synapses.connect(
+    condition=None,
+    i=None,
+    j=None,
+    p=1.0,
+    n=1,
+    skip_if_invalid=False,
+    namespace=None,
+)
+```
+
+### Parameters
+
+<ParamField path="condition" type="str | bool" optional>
+  A boolean string expression evaluated for every (i, j) pair. Can depend on
+  the indices `i` and `j` or on pre/post-synaptic variables. Cannot be
+  combined with explicit `i` / `j` index arguments.
+
+  ```python
+  S.connect(condition="i != j")          # all-to-all, no self-connections
+  S.connect(condition="abs(i - j) < 3") # connect to neighbours
+  ```
+</ParamField>
+
+<ParamField path="i" type="int | ndarray | str" optional>
+  Pre-synaptic neuron indices. Can be a single integer, a NumPy array, or a
+  generator string expression (see Brian2 docs on generator syntax). When
+  combined with `j` as arrays, pairs `(i[k], j[k])` are connected directly.
+</ParamField>
+
+<ParamField path="j" type="int | ndarray | str" optional>
+  Post-synaptic neuron indices. Same rules as `i`. A generator string iterates
+  over post-synaptic cells for each pre-synaptic neuron, e.g.
+  `j='k for k in range(i+1)'`.
+</ParamField>
+
+<ParamField path="p" type="float | str" default="1.0">
+  Probability of creating each connection (wherever the `condition` is `True`).
+  Can be a string expression that depends on `i` or `j`.
+</ParamField>
+
+<ParamField path="n" type="int | str" default="1">
+  Number of synapses to create per (i, j) pair. Useful for multiple synapses
+  between the same neuron pair (requires `multisynaptic_index` to be set).
+</ParamField>
+
+<ParamField path="skip_if_invalid" type="bool" default="False">
+  If `True`, silently ignore out-of-range index pairs instead of raising an
+  `IndexError`. Only applicable with string generator syntax.
+</ParamField>
+
+---
+
+## Key Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `N` | `int` | Current total number of synapses. |
+| `source` | `Group` | The pre-synaptic group. |
+| `target` | `Group` | The post-synaptic group. |
+| `delay` | `Quantity` | The delay of the `pre` pathway (scalar or per-synapse). |
+| `i` | `ndarray` | Pre-synaptic neuron indices for each synapse. |
+| `j` | `ndarray` | Post-synaptic neuron indices for each synapse. |
+| `N_outgoing_pre` | `ndarray` | Number of outgoing synapses per pre-synaptic neuron. |
+| `N_incoming_post` | `ndarray` | Number of incoming synapses per post-synaptic neuron. |
+
+All model variables (e.g. `w`, `x`) are accessible as attributes supporting
+NumPy-style indexing after `connect()` has been called.
+
+---
+
+## Examples
+
+### All-to-all with no self-connections
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, "dv/dt = -v/tau : 1", threshold="v > 1", reset="v = 0",
+                namespace={"tau": 10*ms})
+S = Synapses(G, G, model="w : 1", on_pre="v_post += w")
+S.connect(condition="i != j")
+S.w = 0.1
+```
+
+### Random connectivity with probability `p`
+
+```python
+S = Synapses(source, target, on_pre="v_post += w")
+S.connect(condition="True", p=0.1)
+```
+
+### One-to-one mapping
+
+```python
+S = Synapses(G_in, G_out, on_pre="v_post += 1")
+S.connect(j="i")   # neuron i connects to neuron i
+```
+
+### Explicit index arrays
+
+```python
+S = Synapses(G, G, on_pre="v_post += 1")
+S.connect(i=[0, 1, 2], j=[1, 2, 0])  # 0→1, 1→2, 2→0
+```
+
+### Heterogeneous delays
+
+```python
+S = Synapses(G, G, on_pre="v_post += w", model="w : 1")
+S.connect(condition="True", p=0.2)
+S.w = "rand() * 0.5"
+S.delay = "rand() * 5 * ms"
+```
+
+### STDP (spike-timing-dependent plasticity)
+
+```python
+eqs = """
+w : 1
+dApre/dt  = -Apre  / tau_pre  : 1 (event-driven)
+dApost/dt = -Apost / tau_post : 1 (event-driven)
+"""
+on_pre = """
+v_post += w
+Apre += dApre
+w = clip(w + Apost, 0, wmax)
+"""
+on_post = """
+Apost += dApost
+w = clip(w + Apre, 0, wmax)
+"""
+S = Synapses(G, G, model=eqs, on_pre=on_pre, on_post=on_post,
+             namespace={"tau_pre": 20*ms, "tau_post": 20*ms,
+                        "dApre": 0.01, "dApost": -0.0105, "wmax": 1.0})
+S.connect(condition="i != j", p=0.5)
+S.w = 0.5
+```

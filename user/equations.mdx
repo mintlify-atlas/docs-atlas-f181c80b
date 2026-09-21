@@ -1,0 +1,302 @@
+---
+title: "Equation Strings in Brian2: Model Syntax Reference"
+sidebarTitle: "Equations"
+description: "Brian2 equation strings define neuron and synapse dynamics. Learn the three equation forms, flags, subexpressions, and how to build complex multi-line models."
+---
+
+Brian2 models are described as systems of first-order ordinary differential equations written in plain text strings. These equation strings are used in both `NeuronGroup` and `Synapses` to define state variables and how they evolve over time. Because they are text, they are easy to build programmatically, pass around as function arguments, or compose from reusable fragments — all without sacrificing readability. Brian2 parses the strings, checks them for consistency, and generates efficient code for your chosen simulation backend.
+
+## The Three Equation Forms
+
+Every line in an equation string takes exactly one of three forms:
+
+### 1. Differential Equation
+
+```
+dx/dt = f : unit (flags)
+```
+
+Defines how a variable `x` changes over time. The `unit` is the unit of **the variable itself** (not of its derivative). For example, the unit for membrane potential is `volt`, not `volt/second`.
+
+```python
+# Leaky integrator
+'dv/dt = -v / tau : volt'
+
+# Exponential integrate-and-fire
+'dv/dt = (E_L - v + delta_T*exp((v - v_T)/delta_T)) / tau : volt'
+```
+
+### 2. Subexpression
+
+```
+x = f : unit (flags)
+```
+
+Defines a named expression that is computed on demand rather than stored. Subexpressions make long equations more readable and allow intermediate quantities to be recorded with a `StateMonitor`.
+
+```python
+G = NeuronGroup(10, '''dv/dt = I_leak / C_m : volt
+                        I_leak = g_L * (E_L - v) : amp''')
+```
+
+Because `I_leak` is recomputed each time it is used, it adds no memory overhead. However it does **not** affect simulation speed compared to inlining the expression directly.
+
+### 3. Parameter
+
+```
+x : unit (flags)
+```
+
+Declares a state variable with no associated dynamics. The value is set externally (by assignment, `set_states`, synaptic events, or `run_regularly`). Parameters are ideal for per-neuron properties like a heterogeneous threshold.
+
+```python
+G = NeuronGroup(100, '''dv/dt = -v / tau : volt
+                         tau   : second          # per-neuron time constant
+                         v_th  : volt (constant) # fixed threshold''')
+```
+
+<Tip>
+The `unit` must always be a **base unit** (e.g. `volt`, `second`, `siemens`) even for differential equations. This makes it unambiguous that values are internally stored in SI base units. Compound units like `farad/meter**2` are allowed. For dimensionless variables use `1`; for integer or boolean variables use `integer` or `boolean`.
+</Tip>
+
+## Special Unit Note: Molar Concentration
+
+<Note>
+For molar concentration, use `mmolar` (or `mM`) as the base unit in equation declarations — **not** `molar`. Because 1 molar = 10³ mol/m³ (a non-unity SI scale), Brian2 uses `mmolar` = 1 mol/m³ as the true base unit.
+</Note>
+
+## Flags
+
+Flags are optional keywords in parentheses at the end of an equation line. Multiple flags are separated by commas: `(flag1, flag2)`.
+
+<CardGroup cols={2}>
+  <Card title="(constant)" icon="lock">
+    The parameter does not change during a run. Enables optimizations in state updaters. Only valid for parameters.
+    ```
+    tau : second (constant)
+    ```
+  </Card>
+  <Card title="(shared)" icon="share-nodes">
+    A single value is shared across all neurons or synapses, not stored per-element. Shared subexpressions can only reference other shared variables.
+    ```
+    shared_input : volt (shared)
+    ```
+  </Card>
+  <Card title="(unless refractory)" icon="pause">
+    The differential equation is not integrated while the neuron is in its refractory period. Only valid for differential equations in `NeuronGroup`.
+    ```
+    dv/dt = -v/tau : volt (unless refractory)
+    ```
+  </Card>
+  <Card title="(event-driven)" icon="bolt">
+    Only valid in `Synapses`. The variable is not updated on every clock tick; instead it is updated analytically whenever a pre- or post-synaptic event arrives. Currently limited to one-dimensional linear equations.
+    ```
+    dApre/dt = -Apre/taupre : 1 (event-driven)
+    ```
+  </Card>
+  <Card title="(constant over dt)" icon="clock">
+    The subexpression is evaluated once at the start of each timestep and the result is reused. Required for subexpressions that call stateful functions such as `rand()` so that the same random value is used everywhere within that timestep (including by a `StateMonitor`).
+    ```
+    I_noise = sigma*xi_noise : amp (constant over dt)
+    ```
+  </Card>
+  <Card title="(linked)" icon="link">
+    The parameter is a reference to a variable in another `NeuronGroup` or `SpatialNeuron`. Set with `linked_var`.
+    ```
+    noise : 1 (linked)
+    ```
+  </Card>
+</CardGroup>
+
+## Arithmetic Operations and Functions
+
+Equation strings use Python 3 arithmetic syntax. The supported operators are:
+
+| Operator | Meaning |
+|----------|---------|
+| `+`, `-`, `*` | Addition, subtraction, multiplication |
+| `/` | Floating-point division |
+| `//` | Floor division |
+| `%` | Remainder |
+| `**` | Power |
+| `+=`, `-=`, `*=`, `/=` | In-place (for reset/`on_pre` statements) |
+| `==`, `!=`, `<`, `<=`, `>`, `>=` | Comparisons |
+| `and`, `or`, `not` | Boolean logic |
+
+Standard mathematical functions (same names as in NumPy) are available directly by name — **do not** prefix them with `np.` or `numpy.`:
+
+```python
+# Correct — Brian translates these to any target language
+'exp(-v/tau)'
+'sqrt(2*D/tau)*xi'
+'clip(v, -80*mV, 40*mV)'
+'sin(2*pi*freq*t)'
+'abs(x_pre - x_post)'
+```
+
+Equations are not raw Python code; Brian parses and translates them, so arbitrary Python expressions or imports are not supported inside equation strings.
+
+## Special Variables
+
+Brian2 pre-defines several variables that can be referenced in any equation or code block:
+
+| Name | Meaning |
+|------|---------|
+| `t` | Current simulation time |
+| `dt` | Simulation timestep |
+| `i` | Neuron index (or pre-synaptic index in `Synapses`) |
+| `j` | Post-synaptic neuron index (in `Synapses`) |
+| `N` | Total number of neurons / synapses |
+| `xi`, `xi_*` | Independent Gaussian white noise (units: `1/sqrt(second)`) |
+| `lastspike` | Time of the last spike (for refractoriness) |
+| `not_refractory` | Boolean: `True` when the neuron may spike |
+| `lastupdate` | Time of the last event-driven update (in `Synapses`) |
+
+For multiple independent noise processes, use distinct suffixes:
+
+```python
+# xi_1 and xi_2 are independent noise sources
+eqs = '''
+dv/dt = -v/tau + sigma_v*xi_1/sqrt(tau) : volt
+dw/dt = -w/tau + sigma_w*xi_2/sqrt(tau) : volt
+'''
+```
+
+## External References
+
+Equations can refer to variables defined outside the equation string. By default, Brian2 resolves these from the Python local/global namespace at the time `run()` is called:
+
+```python
+tau = 10 * ms
+G = NeuronGroup(1, 'dv/dt = -v / tau : 1')
+run(10 * ms)     # tau is found automatically in the calling namespace
+```
+
+You can also pass an explicit namespace to the group or to `run`:
+
+```python
+# Namespace on the NeuronGroup
+G = NeuronGroup(1, 'dv/dt = -v / tau : 1', namespace={'tau': 10*ms})
+net = Network(G)
+net.run(10*ms)
+
+# Namespace on run
+G = NeuronGroup(1, 'dv/dt = -v / tau : 1')
+net = Network(G)
+net.run(10*ms, namespace={'tau': 10*ms})
+```
+
+## Multi-line Equations
+
+Definitions can span multiple lines using indentation, and lines may end with a `#` comment:
+
+```python
+eqs = '''
+dv/dt = (
+    g_L*(E_L - v)    # leak
+  + g_e*(E_e - v)    # excitatory conductance
+  + g_i*(E_i - v)    # inhibitory conductance
+) / C_m : volt
+
+dg_e/dt = -g_e / tau_e : siemens  # excitatory conductance decay
+dg_i/dt = -g_i / tau_i : siemens  # inhibitory conductance decay
+'''
+```
+
+## Equation Objects
+
+The `Equations` class wraps a string and provides composition operations. Use the `+` / `+=` operator to concatenate independent equation sets:
+
+```python
+from brian2 import *
+
+eqs = Equations('dx/dt = (y - x) / tau : volt')
+eqs += Equations('dy/dt = -y / tau : volt')
+```
+
+Equations objects also support **variable substitution** — a convenient way to create multiple variants of the same model:
+
+```python
+general_equation = 'dg/dt = -g / tau : siemens'
+eqs_exc = Equations(general_equation, g='g_e', tau='tau_e')
+eqs_inh = Equations(general_equation, g='g_i', tau='tau_i')
+print(eqs_exc)  # dg_e/dt = -g_e / tau_e : S
+print(eqs_inh)  # dg_i/dt = -g_i / tau_i : S
+```
+
+And **value insertion**, replacing a name with a concrete value by string substitution:
+
+```python
+eqs = Equations('dv/dt = mu/tau + sigma/tau**.5*xi : volt',
+                mu=-65*mV, sigma=3*mV, tau=10*ms)
+print(eqs)
+# dv/dt = (-65. * mvolt)/(10. * msecond) + (3. * mvolt)/(10. * msecond)**.5*xi : V
+```
+
+`Equations` performs basic syntax checking and prevents duplicate variable definitions, but full unit checking and identifier validation happen when the `NeuronGroup` or `Synapses` object is created.
+
+## Event-Driven Equations in Synapses
+
+In `Synapses`, marking a differential equation as `(event-driven)` removes it from the continuous state update and instead triggers an analytical update each time a pre- or post-synaptic event arrives:
+
+```python
+model = '''w : 1
+           dApre/dt  = -Apre  / taupre  : 1 (event-driven)
+           dApost/dt = -Apost / taupost : 1 (event-driven)'''
+```
+
+Constraints for event-driven equations:
+- They must be one-dimensional linear equations.
+- They cannot depend on (non-event-driven) differential equations.
+- They can depend on constant parameters.
+
+## Examples
+
+<Tabs>
+  <Tab title="Leaky integrate-and-fire">
+    ```python
+    eqs_LIF = '''
+    dv/dt = (E_L - v + R*I) / tau : volt
+    I : amp (constant)    # injected current (per neuron)
+    '''
+    G = NeuronGroup(N, eqs_LIF,
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV',
+                    refractory=2*ms)
+    ```
+  </Tab>
+  <Tab title="Conductance-based">
+    ```python
+    eqs_cond = '''
+    dv/dt  = (g_L*(E_L-v) + g_e*(E_e-v) + g_i*(E_i-v)) / C_m : volt
+    dg_e/dt = -g_e / tau_e : siemens
+    dg_i/dt = -g_i / tau_i : siemens
+    I_syn  = g_e*(E_e-v) + g_i*(E_i-v) : amp
+    '''
+    ```
+  </Tab>
+  <Tab title="Stochastic (Ornstein-Uhlenbeck)">
+    ```python
+    eqs_ou = '''
+    dv/dt = -v/tau + sigma*sqrt(2/tau)*xi : volt
+    '''
+    G = NeuronGroup(N, eqs_ou,
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV')
+    ```
+  </Tab>
+  <Tab title="Concatenated Equations object">
+    ```python
+    membrane_eqs = Equations('dv/dt = -(v + I) / tau : volt')
+
+    eqs1 = membrane_eqs + Equations('''I = sin(2*pi*freq*t) : volt
+                                        freq : Hz''')
+    eqs2 = membrane_eqs + Equations('I : volt')
+
+    print(eqs1)
+    # I = sin(2*pi*freq*t) : V
+    # dv/dt = -(v + I)/ tau : V
+    # freq : Hz
+    ```
+  </Tab>
+</Tabs>

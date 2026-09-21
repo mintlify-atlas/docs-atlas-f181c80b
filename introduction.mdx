@@ -1,0 +1,132 @@
+---
+title: "Brian2: Python Simulator for Spiking Neural Networks"
+sidebarTitle: "Introduction"
+description: "Brian2 is a free, clock-driven Python simulator for spiking neural networks. Define models as equations, simulate efficiently, and generate optimized C++ code."
+---
+
+Brian2 is a free, open-source, clock-driven simulator for spiking neural networks, written in Python and designed to run on virtually every platform. Built for computational neuroscientists, Brian2 prioritises the time of the scientist over the time of the computer: models are expressed as human-readable differential equations rather than as calls to a fixed library of neuron types, making it easy to prototype, extend, and share simulations. Whether you are modelling a single integrate-and-fire cell or a large recurrent network of Hodgkin–Huxley neurons, Brian2 lets you describe your biology first and worry about implementation details later.
+
+## What is Brian2?
+
+Brian2 is a **clock-driven** simulator, meaning the simulation advances in discrete, fixed time steps controlled by a global `defaultclock`. At each tick, every differential equation in the model is numerically integrated. This design makes timing fully deterministic and reproducible.
+
+Models in Brian2 are specified as **systems of differential equations** written as Python strings. Brian2 parses these strings at runtime, checks them for dimensional consistency using its built-in physical units system, and generates efficient numerical code from them automatically.
+
+Brian2 ships with a rich **physical units system** covering all standard SI units and prefixes. Every quantity you assign to a variable carries its unit, and Brian2 raises a `DimensionMismatchError` if you accidentally mix incompatible units — for example, trying to add amperes to volts. This catches entire classes of modelling mistakes before they silently corrupt results.
+
+```python
+from brian2 import *
+
+# All SI units and prefixes are available
+print(20*mV)        # 20. mV
+print(1*nA * 5*Mohm) # 5. mV  (Ohm's law checked automatically)
+```
+
+Code is executed through Brian2's **code generation** backends. By default, Brian2 targets Cython (compiled C extensions), which provides near-native performance without requiring any changes to the model description. A standalone C++ backend is also available for maximum throughput on long or repeated simulations.
+
+## Key Concepts
+
+The following objects form the core of every Brian2 simulation:
+
+| Object | Purpose |
+|---|---|
+| `NeuronGroup` | A population of neurons sharing the same equations, threshold, reset, and refractory rules |
+| `Synapses` | Connections between neuron groups with arbitrary plasticity rules |
+| `SpikeMonitor` | Records the times and indices of spikes fired by a group |
+| `StateMonitor` | Records the time course of any continuous state variable |
+| `Network` / `run()` | Collects all objects and advances the simulation clock |
+
+<CardGroup cols={2}>
+  <Card title="NeuronGroup" icon="brain">
+    Define populations of spiking neurons entirely through differential equations. Specify threshold conditions, reset statements, and refractory periods as plain Python expressions.
+  </Card>
+  <Card title="Synapses" icon="arrows-left-right">
+    Create connections with arbitrary pre- and post-synaptic effects, including spike-timing-dependent plasticity and gap junctions, all expressed as equations or statements.
+  </Card>
+  <Card title="Monitors" icon="chart-line">
+    Record spikes with `SpikeMonitor` or continuous variables with `StateMonitor`. Data is returned as NumPy arrays for immediate analysis and plotting with Matplotlib.
+  </Card>
+  <Card title="Code Generation" icon="bolt">
+    Brian2 automatically compiles model equations to Cython or standalone C++ for high-performance simulations, with no manual optimisation required.
+  </Card>
+</CardGroup>
+
+### NeuronGroup
+
+`NeuronGroup` is the fundamental building block of any Brian2 simulation. You pass it the number of neurons and a string of differential equations, plus optional `threshold`, `reset`, and `refractory` arguments:
+
+```python
+from brian2 import *
+
+tau = 10*ms
+eqs = '''
+dv/dt = (1-v)/tau : 1 (unless refractory)
+'''
+
+G = NeuronGroup(100, eqs,
+                threshold='v > 0.8',
+                reset='v = 0',
+                refractory=5*ms,
+                method='exact')
+```
+
+The `(unless refractory)` flag freezes the variable during the refractory period. The `method` argument selects the numerical integrator (`'exact'`, `'euler'`, `'exponential_euler'`, etc.).
+
+### Synapses
+
+`Synapses` connects two `NeuronGroup` objects. The `on_pre` argument specifies what happens in the post-synaptic neuron when a pre-synaptic spike arrives:
+
+```python
+S = Synapses(source_group, target_group, on_pre='ge += we')
+S.connect(p=0.02)  # connect with 2 % probability
+```
+
+### Monitors
+
+Brian2 provides two main monitor types:
+
+```python
+spikemon  = SpikeMonitor(G)       # records spike times and neuron indices
+statemon  = StateMonitor(G, 'v', record=True)  # records membrane potential
+
+run(100*ms)
+
+print(spikemon.t)    # array of spike times
+print(spikemon.i)    # array of neuron indices
+print(statemon.v[0]) # voltage trace of neuron 0
+```
+
+### Network and run()
+
+Brian2 collects all objects automatically through its **"magic" network** system. Calling `run(duration)` at the top level simulates every object that has been created in the current scope:
+
+```python
+run(1*second)  # simulate for 1 second using the magic network
+```
+
+For finer control you can construct a `Network` explicitly:
+
+```python
+net = Network(G, S, spikemon)
+net.run(1*second)
+```
+
+<Note>
+  Call `start_scope()` at the beginning of each independent simulation to clear Brian2's internal state. This is especially important when running multiple simulations in a single Python session or Jupyter notebook.
+</Note>
+
+## Citing Brian2
+
+If you use Brian2 in your published research, please cite the following article:
+
+> Stimberg, M, Brette, R, Goodman, DFM. "Brian 2, an Intuitive and Efficient Neural Simulator." *eLife* 8 (2019): e47314. doi: [10.7554/eLife.47314](https://doi.org/10.7554/eLife.47314).
+
+A BibTeX entry is available at the [Brian2 documentation site](https://brian2.readthedocs.io/en/stable/introduction/citing.html).
+
+## License
+
+Brian2 is released under the terms of the [CeCILL 2.1 license](https://opensource.org/licenses/CECILL-2.1), a French free-software license that is compatible with the GNU GPL. You are free to use, modify, and redistribute Brian2, provided you respect the terms of the license. The full license text is included in the source distribution.
+
+<Note>
+  Brian2 is developed and maintained by Marcel Stimberg, Dan Goodman, Benjamin Evans, and Romain Brette, with contributions from the wider neuroscience community. Bug reports and feature requests can be filed on the [GitHub issue tracker](https://github.com/brian-team/brian2/issues). Community discussion takes place on the [Brian forum](https://brian.discourse.group).
+</Note>

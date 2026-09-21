@@ -1,0 +1,370 @@
+---
+title: "Running Brian2 Simulations: Networks and the Magic System"
+sidebarTitle: "Running Simulations"
+description: "Run Brian2 simulations using the magic run() function or explicit Network objects. Learn about multiple runs, network operations, and progress reporting."
+---
+
+Every Brian2 simulation is ultimately executed by calling `run()` — either the standalone magic function, or the `run` method on an explicit `Network` object. The magic system handles the common case automatically, while explicit `Network` objects give you full control for more complex scenarios. This page explains both approaches and covers the related topics of multiple runs, custom operations, progress reporting, and scheduling.
+
+---
+
+## The magic system and `run()`
+
+The simplest way to run a simulation is to create your objects and call `run()`. Brian2 automatically collects all objects that are visible by name in the calling scope and simulates them together:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(G, G, model='w : 1', on_pre='v += w')
+S.connect('i != j')
+S.w = 'rand()'
+mon = SpikeMonitor(G)
+
+run(100 * ms)  # collects G, S, and mon automatically
+
+print(mon.num_spikes)
+```
+
+The internal function behind this is `collect()`, which walks the current namespace and finds every `BrianObject`. The collected objects are assembled into a temporary `MagicNetwork` and its `run` method is called.
+
+<Note>
+The magic system only collects objects that can be referred to by a name in the local or global scope. Objects stored inside lists, dicts, or other containers are **not** collected automatically. If you store monitors in a list, use an explicit `Network` object instead (see the next section).
+</Note>
+
+### Setting the simulation time step
+
+Set `defaultclock.dt` before creating objects to control the integration time step used by everything that does not specify its own clock:
+
+```python
+from brian2 import *
+
+defaultclock.dt = 0.05 * ms
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+run(500 * ms)
+```
+
+---
+
+## Explicit Network objects
+
+When objects are hidden in containers or when you need fine-grained control, create a `Network` object explicitly. Use `collect()` to gather the automatically visible objects, then add additional objects with `net.add()`:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(G, G, model='w : 1', on_pre='v += w')
+S.connect('i != j')
+S.w = 'rand()'
+
+# Monitors stored in a list — invisible to the magic system
+monitors = [SpikeMonitor(G), StateMonitor(G, 'v', record=True)]
+
+net = Network(collect())   # collects G and S
+net.add(monitors)          # manually add the monitors
+
+net.run(100 * ms)
+
+print(monitors[0].num_spikes)
+```
+
+### When to use an explicit Network
+
+<CardGroup cols={2}>
+  <Card title="Objects in containers" icon="box">
+    Monitors or groups stored in lists, dicts, or class attributes are invisible to `collect()`. Add them with `net.add()`.
+  </Card>
+  <Card title="Mixed old and new objects" icon="shuffle">
+    If a second `run()` call would mix previously-simulated objects with new ones, the magic system raises an error. Use an explicit `Network` to control the membership.
+  </Card>
+  <Card title="Multiple independent networks" icon="network-wired">
+    To simulate two separate networks in the same script without them interfering, give each its own `Network` object.
+  </Card>
+  <Card title="Class-based simulations" icon="code">
+    When wrapping a simulation in a class, explicit `Network` objects are the natural choice.
+  </Card>
+</CardGroup>
+
+---
+
+## Multiple runs
+
+### Continuing a simulation
+
+Calling `run()` (or `net.run()`) a second time continues from where the first run ended:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+mon = SpikeMonitor(G)
+
+run(100 * ms)   # simulate 0–100 ms
+run(100 * ms)   # continue to 200 ms
+
+print('Spikes between 0 and 200 ms:', mon.num_spikes)
+```
+
+### Starting a new simulation
+
+If you define entirely new objects and call `run()`, the magic system detects that none of them have been simulated before and starts fresh at t = 0.
+
+The magic system raises an error if a `run()` call would mix previously-simulated objects with new ones. Use `start_scope()` to discard old objects and start clean, or use explicit `Network` objects.
+
+### store / restore for repeated trials
+
+The recommended approach for running multiple trials from the same initial condition is `store()` and `restore()`:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+G.v = 'rand()'
+spike_mon = SpikeMonitor(G)
+
+store()  # snapshot before any simulation
+
+results = []
+for trial in range(10):
+    restore()          # go back to the snapshotted state
+    run(200 * ms)
+    results.append(spike_mon.count[:].copy())
+
+import numpy as np
+print('Mean spikes per neuron across 10 trials:', np.mean(results, axis=0))
+```
+
+Stores can be named to support more complex checkpoint patterns:
+
+```python
+store('initialized')
+# ... run training phase ...
+store('after_training')
+
+for test in range(5):
+    restore('after_training')
+    run(100 * ms)
+```
+
+---
+
+## NetworkOperation and `network_operation` decorator
+
+A `NetworkOperation` is an arbitrary Python function that Brian2 calls at every time step (or at a custom `dt`). Use it when your input or control logic cannot be expressed in Brian2's equation language — for example, switching which neuron receives input based on a condition that spans the entire network.
+
+### Using the decorator
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10,
+                '''dv/dt = (-v + active * I) / (10*ms) : 1
+                   I = sin(2*pi*100*Hz*t) : 1 (shared)
+                   active : 1''')
+
+@network_operation(dt=50*ms)
+def update_active():
+    index = np.random.randint(10)
+    G.active_ = 0        # underscore suffix disables unit checking
+    G.active_[index] = 1
+
+run(500 * ms)
+```
+
+The decorated function is automatically visible to the magic system. To receive the current time `t` as an argument, declare the function with a single parameter:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+
+@network_operation(dt=1*ms)
+def conditional_input(t):
+    if 50*ms < t < 150*ms:
+        G.v += 0.1   # boost all neurons during a specific window
+
+run(300 * ms)
+```
+
+<Note>
+Network operations run as **pure Python code** regardless of the active code generation backend (e.g., Cython). They cannot be used in C++ standalone mode. If you need similar functionality in standalone mode, consider `run_regularly` on a `NeuronGroup` instead.
+</Note>
+
+### Using `NetworkOperation` directly (for class methods)
+
+The `@network_operation` decorator cannot be applied to instance methods. Construct a `NetworkOperation` object explicitly instead:
+
+```python
+from brian2 import *
+
+class Simulation:
+    def __init__(self):
+        self.group = NeuronGroup(10, 'dv/dt = -v / (10*ms) : 1',
+                                 threshold='v > 1', reset='v = 0')
+        self.op = NetworkOperation(self.update, dt=10*ms)
+        self.net = Network(self.group, self.op)
+
+    def update(self):
+        # Custom logic using self.group
+        pass
+
+    def run(self, duration):
+        self.net.run(duration)
+
+sim = Simulation()
+sim.run(200 * ms)
+```
+
+---
+
+## Progress reporting
+
+For long simulations, enable progress reporting by passing `report='text'` to `run()`:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(1000, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+run(10 * second, report='text', report_period=2*second)
+```
+
+Available values for `report`:
+
+| Value | Output destination |
+|---|---|
+| `None` (default) | No output |
+| `'text'` or `'stdout'` | Standard output |
+| `'stderr'` | Standard error |
+| A callable | Called with `(elapsed, completed, start, duration)` |
+
+The `report_period` argument controls how often (in real wall-clock time) progress updates are printed. Reports are always printed at the start and end of the run regardless of `report_period`.
+
+---
+
+## Scheduling
+
+Every Brian2 object has three attributes controlling when it is updated within each time step: `dt` (or `clock`), `when`, and `order`.
+
+### The default schedule
+
+Objects are executed in the order defined by `Network.schedule`, which defaults to:
+
+```
+['start', 'groups', 'thresholds', 'synapses', 'resets', 'end']
+```
+
+In addition to these names, slots like `'before_thresholds'` and `'after_synapses'` are automatically understood.
+
+### Inspecting the schedule
+
+Use `scheduling_summary()` to see the order in which all objects will run:
+
+```python
+from brian2 import *
+
+group = NeuronGroup(10, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+mon = StateMonitor(group, 'v', record=True, dt=1*ms)
+scheduling_summary()
+```
+
+### Activating and deactivating objects
+
+Set the `active` attribute on any object to exclude it from a portion of the simulation:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(100, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+monitor = SpikeMonitor(G)
+monitor.active = False        # do not record during warm-up
+
+run(1 * second)               # warm-up phase — monitor is inactive
+
+monitor.active = True
+run(500 * ms)                 # recording phase
+
+print('Spikes in the recording window:', monitor.num_spikes)
+```
+
+### Profiling
+
+Pass `profile=True` to collect per-object timing information:
+
+```python
+from brian2 import *
+
+G = NeuronGroup(1000, 'dv/dt = -v / (10*ms) : 1',
+                threshold='v > 1', reset='v = 0')
+S = Synapses(G, G, on_pre='v += 0.01')
+S.connect(p=0.1)
+run(1 * second, profile=True)
+
+profiling_summary(show=5)
+```
+
+---
+
+## Complete example: magic vs. explicit Network
+
+The snippet below shows both approaches side by side for the same simple simulation:
+
+<Tabs>
+  <Tab title="Magic system">
+    ```python
+    from brian2 import *
+
+    defaultclock.dt = 0.1 * ms
+
+    G = NeuronGroup(50,
+                    'dv/dt = (1 - v) / (10*ms) : 1',
+                    threshold='v > 0.9', reset='v = 0')
+    G.v = 'rand()'
+
+    S = Synapses(G, G, on_pre='v += 0.05')
+    S.connect(p=0.1)
+
+    spike_mon = SpikeMonitor(G)
+    state_mon = StateMonitor(G, 'v', record=[0, 1, 2])
+
+    run(500 * ms, report='text')
+
+    print('Total spikes:', spike_mon.num_spikes)
+    ```
+  </Tab>
+  <Tab title="Explicit Network">
+    ```python
+    from brian2 import *
+
+    defaultclock.dt = 0.1 * ms
+
+    G = NeuronGroup(50,
+                    'dv/dt = (1 - v) / (10*ms) : 1',
+                    threshold='v > 0.9', reset='v = 0')
+    G.v = 'rand()'
+
+    S = Synapses(G, G, on_pre='v += 0.05')
+    S.connect(p=0.1)
+
+    # Monitors hidden in a list — need explicit Network
+    monitors = [SpikeMonitor(G), StateMonitor(G, 'v', record=[0, 1, 2])]
+
+    net = Network(collect())
+    net.add(monitors)
+
+    net.run(500 * ms, report='text')
+
+    print('Total spikes:', monitors[0].num_spikes)
+    ```
+  </Tab>
+</Tabs>

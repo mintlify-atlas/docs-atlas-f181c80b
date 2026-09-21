@@ -1,0 +1,161 @@
+---
+title: "Brian2 Preferences: Global Configuration System"
+sidebarTitle: "Preferences"
+description: "Configure Brian2 behavior globally with the preferences system. Set codegen targets, compiler options, and other defaults via prefs object or preference files."
+---
+
+Brian2 exposes a global preferences system through the `prefs` object that lets you tune simulation behaviour — from the code generation target and compiler flags to floating-point precision and logging verbosity — without modifying individual objects. Preferences use dotted names such as `codegen.cpp.compiler` and can be set interactively in a script, in a per-user configuration file, or in a project-local file. Settings cascade in a well-defined order so that project-specific overrides always take priority.
+
+## Accessing and Setting Preferences
+
+Preferences can be read and written using either a **keyword-based** (dictionary-style) or **attribute-based** interface. Both forms are exactly equivalent:
+
+```python
+from brian2 import *
+
+# Dictionary-style
+prefs['codegen.cpp.compiler'] = 'unix'
+
+# Attribute-style — identical effect
+prefs.codegen.cpp.compiler = 'unix'
+```
+
+<Tip>
+In IPython or Jupyter, the attribute-based form supports tab-completion and inline documentation. Typing `prefs.codegen.cpp?` in IPython will display a docstring listing every preference available under the `codegen.cpp` category along with their default values and descriptions.
+</Tip>
+
+## Preference Files
+
+Preferences are loaded automatically when Brian2 is imported from two file locations, in the following priority order (each later file overrides earlier ones):
+
+<Steps>
+  <Step title="User defaults">
+    `~/.brian/user_preferences` — applies to all projects for the current user. The `~` symbol resolves correctly on both Linux/macOS and Windows.
+  </Step>
+  <Step title="Project defaults">
+    `./brian_preferences` — a file in the **current working directory**, for project-specific overrides.
+  </Step>
+</Steps>
+
+### File Format
+
+Preference files use a simple INI-like format. Lines beginning with `#` are comments, and `[section]` headers act as prefixes for the keys that follow:
+
+```ini
+# Set the code generation target for all scripts in this project
+codegen.target = 'cython'
+
+# Comment line — ignored by Brian
+[codegen.cpp]
+compiler = 'unix'
+extra_compile_args = ['-O3', '-march=native']
+
+[core]
+default_float_dtype = float64
+```
+
+The section `[a.b]` followed by `key = value` is equivalent to writing `a.b.key = value` at the top level. So the file above sets `codegen.target`, `codegen.cpp.compiler`, `codegen.cpp.extra_compile_args`, and `core.default_float_dtype`.
+
+Values are parsed with Python's `eval`, so strings must be quoted (`'unix'`), lists use Python syntax (`['-O3']`), and all Brian unit names are available.
+
+## Key Preferences Reference
+
+<CardGroup cols={2}>
+  <Card title="codegen.target">
+    **Default:** `'auto'`
+
+    The code generation target for runtime simulations. `'auto'` selects `'cython'` if available, otherwise falls back to `'numpy'`. Set explicitly to `'numpy'` or `'cython'` to suppress the fallback warning.
+
+    ```python
+    prefs.codegen.target = 'cython'
+    ```
+  </Card>
+  <Card title="codegen.cpp.compiler">
+    **Default:** `''` (auto-detect)
+
+    The C++ compiler to use for Cython and standalone builds. Common values are `'unix'` (GCC/Clang on Linux/macOS) and `'msvc'` (MSVC on Windows).
+
+    ```python
+    prefs.codegen.cpp.compiler = 'unix'
+    ```
+  </Card>
+  <Card title="codegen.cpp.extra_compile_args">
+    **Default:** platform-dependent optimisation flags
+
+    Extra arguments passed to the C++ compiler. Overrides the default optimisation flags. You can also use `codegen.cpp.extra_compile_args_gcc` or `codegen.cpp.extra_compile_args_msvc` to target a specific compiler only.
+
+    ```python
+    prefs.codegen.cpp.extra_compile_args = ['-O2']
+    ```
+  </Card>
+  <Card title="core.default_float_dtype">
+    **Default:** `float64`
+
+    The NumPy dtype used for all floating-point state variables unless overridden per-variable. Set to `float32` to reduce memory usage at the cost of precision.
+
+    ```python
+    import numpy as np
+    prefs.core.default_float_dtype = np.float32
+    ```
+  </Card>
+  <Card title="devices.cpp_standalone.openmp_threads">
+    **Default:** `0` (disabled)
+
+    The number of OpenMP threads for parallel C++ standalone simulations. Set to a positive integer to enable multi-threading. Only effective when using `set_device('cpp_standalone')`.
+
+    ```python
+    prefs.devices.cpp_standalone.openmp_threads = 4
+    ```
+  </Card>
+  <Card title="logging.console_log_level">
+    **Default:** `'INFO'`
+
+    The minimum log level displayed on the console. Options in ascending severity: `'DEBUG'`, `'INFO'`, `'WARNING'`, `'ERROR'`. Set to `'WARNING'` for quieter output during large batch runs.
+
+    ```python
+    prefs.logging.console_log_level = 'WARNING'
+    ```
+  </Card>
+</CardGroup>
+
+## Example: Setting Preferences in a Script
+
+```python
+from brian2 import *
+import numpy as np
+
+# Force Cython code generation with aggressive optimisation
+prefs.codegen.target = 'cython'
+prefs.codegen.cpp.extra_compile_args_gcc = ['-O3', '-march=native', '-ffast-math']
+
+# Use single precision to halve memory bandwidth
+prefs.core.default_float_dtype = np.float32
+
+# Only show warnings and errors on the console
+prefs.logging.console_log_level = 'WARNING'
+
+group = NeuronGroup(10000, 'dv/dt = -v/(10*ms) : 1',
+                    threshold='v > 1', reset='v = 0')
+group.v = 'rand()'
+run(1*second)
+```
+
+## Example: Project Preference File
+
+Create a file named `brian_preferences` in your project directory to apply settings automatically for every script run from that directory:
+
+```ini
+# brian_preferences — project-level overrides
+
+[codegen]
+target = 'cython'
+
+[codegen.cpp]
+extra_compile_args = ['-O3', '-march=native']
+
+[core]
+default_float_dtype = float64
+
+[logging]
+console_log_level = 'WARNING'
+```

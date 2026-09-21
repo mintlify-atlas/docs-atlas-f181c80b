@@ -1,20 +1,88 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Brian: Spiking Neural Network Simulator for Python"
+sidebarTitle: "Home"
+description: "Brian2 is a free, open-source Python simulator for spiking neural networks. Define neuron models as equations, simulate networks of arbitrary size, and generate optimized C++ code automatically."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Brian2 is a clock-driven simulator for spiking neural networks written in Python. Whether you are modeling a single leaky integrate-and-fire neuron or a large-scale cortical network with plastic synapses, Brian lets you express your model as equations and takes care of the rest — from numerical integration to code generation.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install Brian2 via conda, pip, or your system package manager and verify your setup.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Build and run your first spiking neural network simulation in under 5 minutes.
+  </Card>
+  <Card title="Neuron Models" icon="brain" href="/user/models-and-neuron-groups">
+    Define neuron dynamics using equation strings, thresholds, and reset conditions.
+  </Card>
+  <Card title="Synapses" icon="diagram-project" href="/user/synapses">
+    Connect neurons with flexible synaptic models including STDP and short-term plasticity.
+  </Card>
+  <Card title="Recording" icon="chart-line" href="/user/recording">
+    Monitor spikes, state variables, and population firing rates during simulations.
+  </Card>
+  <Card title="API Reference" icon="code" href="/reference/neurongroup">
+    Full parameter documentation for NeuronGroup, Synapses, monitors, and more.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## Why Brian2?
+
+Brian2 is designed to save the time of scientists, not just processors. Its equation-based model definition means you write neural models the same way they appear in papers — no translation into simulator-specific abstractions required.
+
+<CardGroup cols={3}>
+  <Card title="Equation-Based Models" icon="function">
+    Describe neuron and synapse dynamics directly as differential equations using familiar mathematical notation.
+  </Card>
+  <Card title="Physical Units" icon="ruler">
+    Brian enforces dimensional consistency. Mixing volts with seconds raises an error, not a silent bug.
+  </Card>
+  <Card title="Code Generation" icon="bolt">
+    Automatically generate and compile Cython or C++ standalone code for high-performance simulations.
+  </Card>
+  <Card title="Flexible Synapses" icon="arrows-split-up-and-left">
+    Model any synaptic mechanism — AMPA, NMDA, GABA, STDP, gap junctions — with a unified interface.
+  </Card>
+  <Card title="Multicompartmental" icon="sitemap">
+    Simulate morphologically detailed neurons with the SpatialNeuron class and Hodgkin-Huxley channels.
+  </Card>
+  <Card title="Magic Networking" icon="wand-magic-sparkles">
+    The magic run system automatically collects all objects in scope — no boilerplate Network setup needed.
+  </Card>
+</CardGroup>
+
+## Get Started in 3 Steps
+
+<Steps>
+  <Step title="Install Brian2">
+    Install Brian2 into a Python environment using conda or pip:
+    ```bash
+    conda install -c conda-forge brian2
+    # or
+    pip install brian2
+    ```
+  </Step>
+  <Step title="Write your first simulation">
+    Define a leaky integrate-and-fire network and run it:
+    ```python
+    from brian2 import *
+
+    tau = 10*ms
+    G = NeuronGroup(100, 'dv/dt = -v/tau : volt',
+                    threshold='v > -50*mV', reset='v = -70*mV')
+    G.v = -70*mV
+
+    M = SpikeMonitor(G)
+    run(100*ms)
+    print(f'Total spikes: {M.num_spikes}')
+    ```
+  </Step>
+  <Step title="Explore further">
+    Browse the [User Guide](/user/models-and-neuron-groups) to learn about synapses, recording, and performance optimizations — or jump to the [Examples](/examples/overview) to see complete published network models.
+  </Step>
+</Steps>
+
+<Note>
+  Brian2 requires Python ≥ 3.12 and NumPy ≥ 2.0. See the [installation page](/installation) for full dependency details and platform-specific instructions.
+</Note>

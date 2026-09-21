@@ -1,0 +1,395 @@
+---
+title: "Network and run() API Reference — Brian2 Simulation Control"
+sidebarTitle: "Network"
+description: "API reference for Brian2's Network class and magic run() function. Add objects, run simulations, store and restore state, and schedule operations."
+---
+
+Brian2 offers two complementary ways to run a simulation. The **magic** interface (`run()`, `store()`, `restore()`) automatically collects all Brian objects visible in the current Python scope and manages them transparently. The **explicit** interface requires you to create a `Network` object, add your objects to it, and call `Network.run()`. The explicit interface is more verbose but gives you precise control over which objects participate in each run and avoids the pitfalls of the magic system's scope detection. Both approaches share the same underlying run loop and scheduling mechanisms.
+
+---
+
+## Magic `run()` Function
+
+Runs a simulation with all Brian objects visible in the current scope for the given duration. Internally this calls `magic_network.run()`.
+
+```python
+run(
+    duration,
+    report=None,
+    report_period=10 * second,
+    namespace=None,
+    profile=None,
+)
+```
+
+### Parameters
+
+<ParamField path="duration" type="Quantity" required>
+  How long to simulate (in biological time). Must be non-negative. If all
+  objects in scope are new (have never been run), time starts from 0. If all
+  objects were previously run, the simulation continues from where it left off.
+</ParamField>
+
+<ParamField path="report" type="str | callable | None" default="None">
+  Progress reporting. Options:
+  - `None` — no progress output.
+  - `"text"` or `"stdout"` — print progress to `sys.stdout`.
+  - `"stderr"` — print progress to `sys.stderr`.
+  - A callable `f(elapsed, completed, start, duration)` that is called
+    periodically. `elapsed` is a `Quantity` of real time, `completed` is a
+    float from 0.0 to 1.0, `start` and `duration` are `Quantity` values of
+    simulation time.
+</ParamField>
+
+<ParamField path="report_period" type="Quantity" default="10*second">
+  Real-time interval between progress reports.
+</ParamField>
+
+<ParamField path="namespace" type="dict-like" optional>
+  An additional namespace for resolving identifiers in model equations. If not
+  given, Brian2 uses the locals and globals at the call site of `run`.
+</ParamField>
+
+<ParamField path="profile" type="bool" optional>
+  Whether to record profiling information. If `None`, uses the device's
+  default. After the run, call `profiling_summary()` to display the results.
+</ParamField>
+
+**Raises** `MagicError` when Brian cannot safely determine whether to start a
+new simulation or continue an existing one (e.g. a mix of new and previously
+run objects is detected).
+
+---
+
+## `collect()` Function
+
+Return the set of Brian objects that would be included in a `run()` call at
+this point in the code.
+
+```python
+objects = collect()
+```
+
+<ParamField path="level" type="int" default="0">
+  Stack-frame depth offset. Increase by 1 for each level of function nesting
+  above the call site when using `collect` inside a helper function.
+</ParamField>
+
+**Returns** `set` of `BrianObject` instances.
+
+---
+
+## Magic `store()` / `restore()` Functions
+
+Convenience wrappers around `Network.store` / `Network.restore` that operate
+on the magic network.
+
+```python
+store(name="default", filename=None)
+restore(name="default", filename=None, restore_random_state=False)
+```
+
+See `Network.store` and `Network.restore` below for full parameter details.
+
+---
+
+## `Network` Class
+
+Explicit simulation controller. Holds a set of Brian objects and runs them in
+the correct order according to the schedule.
+
+```python
+Network(*objs, name="network*")
+```
+
+### Constructor
+
+<ParamField path="*objs" type="BrianObject | container" optional>
+  Objects to add immediately. Accepts individual `BrianObject` instances,
+  lists, tuples, sets, or dicts (values are added). Nested containers are
+  handled recursively.
+</ParamField>
+
+<ParamField path="name" type="str" default='"network*"'>
+  Unique name for the network.
+</ParamField>
+
+### Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `t` | `Quantity` | Current simulation time. Can be set to reset time: `net.t = 0*second`. |
+| `objects` | `set` | The set of top-level `BrianObject` instances in this network. |
+| `profiling_info` | `list` | Sorted list of `(name, time)` tuples after a profiled run. |
+
+Objects can also be accessed by name using dictionary-style syntax:
+
+```python
+net["neurongroup"]   # returns the object named "neurongroup"
+```
+
+### Methods
+
+#### `add(*objs)`
+
+Add one or more Brian objects (or containers of objects) to the network.
+
+```python
+net.add(G, S, spike_mon)
+net.add([G, S])
+```
+
+<ParamField path="*objs" type="BrianObject | container" required>
+  Objects or containers to add.
+</ParamField>
+
+**Raises** `RuntimeError` if an object has already been simulated as part of
+another network.
+
+---
+
+#### `remove(*objs)`
+
+Remove one or more objects from the network.
+
+```python
+net.remove(spike_mon)
+```
+
+<ParamField path="*objs" type="BrianObject | container" required>
+  Objects or containers to remove.
+</ParamField>
+
+---
+
+#### `run(duration, report=None, report_period=10*second, namespace=None, profile=None)`
+
+Run the network for the given duration.
+
+```python
+net.run(100 * ms)
+net.run(100 * ms, report="text")
+```
+
+<ParamField path="duration" type="Quantity" required>
+  Simulation time to run.
+</ParamField>
+
+<ParamField path="report" type="str | callable | None" default="None">
+  Progress reporting (same options as the magic `run()` function).
+</ParamField>
+
+<ParamField path="report_period" type="Quantity" default="10*second">
+  Real-time interval between reports.
+</ParamField>
+
+<ParamField path="namespace" type="dict-like" optional>
+  Extra namespace for identifier resolution.
+</ParamField>
+
+<ParamField path="profile" type="bool" optional>
+  Enable profiling. Access results via `net.profiling_info`.
+</ParamField>
+
+---
+
+#### `store(name="default", filename=None)`
+
+Snapshot the full internal state of all objects in the network.
+
+```python
+net.store()                        # in memory as "default"
+net.store(name="checkpoint")       # named in-memory snapshot
+net.store(name="s1", filename="state.pkl")   # to disk
+```
+
+<ParamField path="name" type="str" default='"default"'>
+  Label for this snapshot. Multiple snapshots can coexist under different names.
+</ParamField>
+
+<ParamField path="filename" type="str" optional>
+  Path to a pickle file. If omitted, the state is stored in memory. A single
+  file can hold multiple named snapshots.
+</ParamField>
+
+**Note** Only internal variable values and undelivered spike queues are saved.
+Equations, threshold conditions, etc. are *not* serialised.
+
+---
+
+#### `restore(name="default", filename=None, restore_random_state=False)`
+
+Restore a previously saved snapshot.
+
+```python
+net.restore()
+net.restore(name="checkpoint")
+net.restore(name="s1", filename="state.pkl")
+```
+
+<ParamField path="name" type="str" default='"default"'>
+  Name of the snapshot to restore.
+</ParamField>
+
+<ParamField path="filename" type="str" optional>
+  Pickle file path. Must match the `filename` used in `store`.
+</ParamField>
+
+<ParamField path="restore_random_state" type="bool" default="False">
+  If `True`, also restores the random number generator state, giving fully
+  deterministic re-runs of stochastic simulations.
+</ParamField>
+
+---
+
+#### `get_profiling_info()`
+
+Return profiling data as a list of `(name, time)` tuples sorted by descending
+execution time. Equivalent to reading the `profiling_info` property.
+
+**Raises** `ValueError` if the run was not performed with `profile=True`.
+
+---
+
+## `NetworkOperation` and `@network_operation`
+
+A `NetworkOperation` wraps a plain Python function so that it is called at
+every time step (or on a custom clock) as part of the simulation.
+
+### `NetworkOperation`
+
+```python
+NetworkOperation(
+    function,
+    dt=None,
+    clock=None,
+    when="start",
+    order=0,
+)
+```
+
+<ParamField path="function" type="callable" required>
+  A function with either no arguments (called as `f()`) or one argument
+  (called as `f(t)`, where `t` is the current clock time as a `Quantity`).
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Custom time step for calling the function. Mutually exclusive with `clock`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  Custom clock. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="when" type="str" default='"start"'>
+  Scheduling slot.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Priority within the slot.
+</ParamField>
+
+### `@network_operation` Decorator
+
+Convert a function into a `NetworkOperation` automatically.
+
+```python
+@network_operation
+def my_op():
+    ...          # called every time step
+
+@network_operation(dt=0.5 * ms, when="end")
+def my_op(t):
+    print(t)     # called every 0.5 ms, at the 'end' slot
+```
+
+---
+
+## `defaultclock`
+
+The global default simulation clock used by all objects that are not given an
+explicit `dt` or `clock`.
+
+```python
+from brian2 import defaultclock
+defaultclock.dt = 0.1 * ms   # change the time step before building the network
+```
+
+| Attribute | Description |
+|-----------|-------------|
+| `dt` | Time step as a `Quantity` (default `0.1*ms`). Must be set *before* any objects that depend on it are created. |
+| `t` | Current simulation time. |
+
+---
+
+## Examples
+
+### Magic interface (simplest form)
+
+```python
+from brian2 import *
+
+tau = 10 * ms
+G = NeuronGroup(100, "dv/dt = -v/tau : 1",
+                threshold="v > 1", reset="v = 0",
+                namespace={"tau": tau})
+G.v = "rand()"
+mon = SpikeMonitor(G)
+
+run(200 * ms, report="text")
+print(f"Total spikes: {mon.num_spikes}")
+```
+
+### Explicit `Network` with store/restore
+
+```python
+from brian2 import *
+
+G = NeuronGroup(50, "dv/dt = -v/(10*ms) : 1",
+                threshold="v > 1", reset="v = 0")
+G.v = "rand()"
+mon = SpikeMonitor(G)
+
+net = Network(G, mon)
+net.run(50 * ms)
+net.store(name="mid")
+
+net.run(50 * ms)
+print("Second half spikes:", mon.num_spikes)
+
+net.restore(name="mid")
+net.run(50 * ms)
+print("Re-run second half spikes:", mon.num_spikes)
+```
+
+### Profiling a run
+
+```python
+from brian2 import *
+
+G = NeuronGroup(1000, "dv/dt = -v/(10*ms) : 1",
+                threshold="v > 1", reset="v = 0")
+G.v = "rand()"
+net = Network(G)
+net.run(1 * second, profile=True)
+
+for name, t in net.profiling_info:
+    print(f"{name}: {t}")
+```
+
+### Custom `NetworkOperation`
+
+```python
+from brian2 import *
+
+G = NeuronGroup(10, "dv/dt = -v/(10*ms) : 1",
+                threshold="v > 1", reset="v = 0")
+G.v = "rand()"
+
+@network_operation(dt=10 * ms)
+def report_mean(t):
+    print(f"t={t/ms:.0f} ms  mean_v={G.v.mean():.3f}")
+
+net = Network(G, report_mean)
+net.run(50 * ms)
+```

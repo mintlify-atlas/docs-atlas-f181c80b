@@ -1,0 +1,160 @@
+---
+title: "Brian2 Compatibility, Reproducibility, and Version Policy"
+sidebarTitle: "Compatibility"
+description: "Understand Brian2's support policy for Python and NumPy versions, backwards compatibility guarantees, and how to ensure reproducible simulation results."
+---
+
+Brian2 follows a principled approach to compatibility: it supports a rolling window of recent Python and NumPy versions, maintains backwards compatibility for well-behaved simulation scripts across releases, and provides explicit mechanisms to make simulation results reproducible. Understanding these policies helps you write scripts that continue to work as Brian2 evolves and produce consistent results across runs, machines, and code generation targets.
+
+## Supported Python and NumPy Versions
+
+Brian2 follows the [SPEC-0 policy](https://scientific-python.org/specs/spec-0000/) used by the broader scientific Python ecosystem:
+
+- **Python:** All minor versions released in the last **three years** are supported.
+- **NumPy:** All minor versions released in the **two years** prior to the Brian2 release are supported.
+
+This means the currently supported baseline is Python **≥ 3.12** and NumPy **≥ 2.0**, though the exact lower bound advances with each new Brian2 release as older versions age out of the support window.
+
+<Note>
+  Brian2 does not control which versions are packaged by the [conda-forge](https://conda-forge.org/) infrastructure. If a conda package is not available for your Python or NumPy version, you can either update your environment to a supported version or install Brian2 via `pip` instead.
+</Note>
+
+## Backwards Compatibility Policy
+
+Brian2 aims to keep backwards-incompatible changes to a minimum. In general, scripts written for an older Brian2 release should continue to run correctly with newer versions and produce the same results.
+
+### Bug Fix Exceptions
+
+The one firm exception to this rule is the correction of clearly identified bugs that produce **incorrect simulation results** — not merely a difference in interpretation, but a demonstrably wrong numerical outcome. Because it would be harmful to new users to require opt-in behaviour to get correct results, Brian2 always changes the default behaviour when fixing such bugs.
+
+Where possible, a preference in the `legacy` category is provided so that existing scripts can opt back into the old (incorrect) behaviour to reproduce previous results with a newer Brian2 version. The preference `legacy.refractory_timing` is one such example.
+
+### Syntax Deprecations
+
+When an argument name or syntax element is confusing, Brian2 may introduce a replacement name while keeping the old syntax valid for backwards compatibility. The documentation and examples are updated to use the new syntax, but old code continues to work.
+
+For particularly prominent renames, a **deprecation warning** is issued when the old syntax is used. The warning always contains the full information needed to update the code. For example, the `pre` and `post` keyword arguments in `Synapses` have been replaced by `on_pre` and `on_post`:
+
+<CodeGroup>
+```python Old syntax (deprecated, still works)
+syn = Synapses(source, target,
+               model='w : 1',
+               pre='ge += w',
+               post='ge -= w')
+```
+
+```python New syntax (recommended)
+syn = Synapses(source, target,
+               model='w : 1',
+               on_pre='ge += w',
+               on_post='ge -= w')
+```
+</CodeGroup>
+
+Similarly, the integration method name `'linear'` has been superseded by `'exact'` to avoid the mistaken impression that it is a linear approximation. The old name remains valid but `'exact'` is preferred in all new code.
+
+## Reproducibility
+
+Ensuring that a Brian2 simulation produces the same results on repeated runs requires understanding the several independent sources of variation the framework is exposed to.
+
+### Sources of Variation
+
+<Warning>
+  Brian2 does **not** guarantee exact bitwise reproducibility of results across different runs in general. Several factors can introduce variation:
+
+  - **SymPy term ordering** — the order in which equation terms are evaluated can change with the version of SymPy, the symbolic mathematics library Brian2 uses internally.
+  - **Compiler optimisations** — Brian2 asks the C/C++ compiler to apply optimisations that can produce subtly different floating-point results depending on the compiler and its version.
+  - **Code generation target** — whether the simulation runs as Python, Cython, or C++ standalone code can affect the order in which random numbers are drawn and floating-point operations are evaluated.
+  - **Thread count** — for C++ standalone simulations, changing the number of OpenMP threads can alter the result.
+</Warning>
+
+Bitwise reproducibility is only guaranteed when all of the following hold:
+- The same code generation target is used
+- The same number of threads is used (for C++ standalone)
+- The same Brian2, Python, NumPy, SymPy, and compiler versions are used
+
+### Random Number Seeding
+
+Streams of random numbers in Brian2 simulations — including synapse generation and stochastic processes — are reproducible when a seed is set using Brian2's `seed()` function.
+
+```python
+from brian2 import *
+
+seed(42)  # set the random seed before building the network
+
+tau = 10*ms
+N = 100
+
+group = NeuronGroup(N, 'dv/dt = -v/tau : volt',
+                    threshold='v > -50*mV',
+                    reset='v = -70*mV')
+group.v = '-70*mV + 10*mV*randn()'  # reproducible initial values
+
+syn = Synapses(group, group, 'w : volt', on_pre='v += w')
+syn.connect(p=0.1)   # reproducible connectivity
+syn.w = '1*mV*rand()'
+
+mon = SpikeMonitor(group)
+run(100*ms)
+```
+
+<Note>
+  There is an important difference in how `seed()` works between **runtime mode** and **standalone mode**:
+
+  - **Runtime mode:** NumPy's random number generator is always used, even from generated Cython code. Calling `seed()` sets NumPy's seed, which applies to all random numbers whether they come from an explicit `np.random.randn()` call or a Brian2 string expression like `'randn()'`.
+  - **Standalone mode:** Random numbers are generated by an independent RNG (using the same algorithm as NumPy) that is seeded by `seed()`. Explicit calls to `np.random` in the same script are **not** affected by `seed()`. To make a standalone script fully reproducible, either set NumPy's seed manually in addition to calling `seed()`, or rewrite all random initialisations as Brian2 string expressions so they go through the code generator.
+
+  For example, replace:
+  ```python
+  group.v = -70*mV + 10*mV * np.random.randn(len(group))
+  ```
+  with:
+  ```python
+  group.v = '-70*mV + 10*mV*randn()'
+  ```
+</Note>
+
+### Execution Order and Random Number Streams
+
+When a simulation contains multiple sources of randomness (for example, multiple `PoissonGroup` objects), the order in which those objects execute determines how random numbers are distributed among them. This order is deterministic, but if it is not unambiguously fixed by the `when` and `order` attributes, it depends on the **names** of the objects.
+
+When names are not given explicitly, Brian2 generates them automatically (e.g. `poissongroup`, `poissongroup_1`, …). If you run multiple simulations in the same Python process, these auto-generated names can change between runs, causing a different ordering and therefore different random number streams.
+
+To ensure a reproducible stream:
+
+<Steps>
+  <Step title="Fix object names explicitly">
+    Pass a `name` argument when creating objects whose execution order matters:
+
+    ```python
+    pg1 = PoissonGroup(100, rates=100*Hz, name='input_excitatory')
+    pg2 = PoissonGroup(25,  rates=50*Hz,  name='input_inhibitory')
+    ```
+  </Step>
+  <Step title="Fix execution order with the order attribute">
+    Use the `order` argument to unambiguously specify the simulation schedule:
+
+    ```python
+    pg1 = PoissonGroup(100, rates=100*Hz, order=0)
+    pg2 = PoissonGroup(25,  rates=50*Hz,  order=1)
+    ```
+  </Step>
+  <Step title="Run each simulation in a fresh Python process">
+    The safest approach for batch simulations is to run each one in a fresh interpreter so that auto-generated names always start from the same baseline.
+  </Step>
+</Steps>
+
+## Legacy Preferences for Restoring Old Behaviour
+
+When a bug fix changes the default behaviour of Brian2, a corresponding `legacy` preference is usually provided to restore the old behaviour for scripts that need to reproduce results from a previous version. These preferences are documented alongside the relevant release notes and the bug descriptions. Use them only when reproducing old results; new simulations should always use the current defaults.
+
+```python
+from brian2 import *
+
+# Example: restore pre-2.x refractory timing behaviour
+prefs.legacy.refractory_timing = True
+```
+
+<Warning>
+  Brian2 only guarantees the reproducibility of results for code that **does not raise any error**. Error-handling improvements across releases can cause errors to be raised at a different time (e.g. at object creation instead of at `run()`), change the type of error raised, or alter the error message text. Do not use `try`/`except` blocks to implement simulation logic in Brian2 scripts.
+</Warning>

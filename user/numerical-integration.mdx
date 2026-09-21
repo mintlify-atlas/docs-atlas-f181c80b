@@ -1,0 +1,220 @@
+---
+title: "Numerical Integration Methods for Brian2 Simulations"
+sidebarTitle: "Numerical Integration"
+description: "Brian2 automatically selects integration methods for differential equations. Learn about exact, Euler, RK4, exponential Euler, stochastic, and GSL methods."
+---
+
+Brian2 selects an integration method for your differential equations automatically. It first attempts to solve the equations exactly (analytically) for linear systems, and falls back to numerical algorithms if that is not possible. It also handles stochastic differential equations correctly, choosing an appropriate Euler-Maruyama or Milstein scheme. In most cases, you do not need to think about integration at all — but understanding the available methods and their trade-offs lets you override Brian's choice when needed or squeeze out extra performance and accuracy.
+
+<Note>
+Each time Brian2 chooses a method automatically, it emits an `INFO` message stating which method was selected and how long it took to determine this. If Brian also tried other methods first (e.g. the `exact` solver), the time spent on those failed attempts is reported too. To suppress this message, raise the log level or filter out `'method_choice'` log messages. To avoid the overhead of trying methods that cannot apply, specify the method manually.
+</Note>
+
+## Available Integration Methods
+
+<CardGroup cols={2}>
+  <Card title="exact / linear" icon="check-circle">
+    Analytically exact integration for **linear** ODEs. Brian2 checks whether your equations are linear and, if so, computes a closed-form solution. Zero numerical error.
+    ```python
+    method='exact'    # or equivalently: method='linear'
+    ```
+  </Card>
+  <Card title="exponential_euler" icon="e">
+    Exponential Euler for **conditionally linear** equations — equations that are linear in the variable being integrated but may depend on other (non-integrated) variables. More accurate than forward Euler for many neural models.
+    ```python
+    method='exponential_euler'
+    ```
+  </Card>
+  <Card title="euler" icon="arrow-right">
+    Forward Euler / Euler-Maruyama for general ODEs and additive stochastic differential equations. Simple and fast, but first-order accurate.
+    ```python
+    method='euler'
+    ```
+  </Card>
+  <Card title="rk2" icon="2">
+    Second-order Runge-Kutta (midpoint method). Better accuracy than Euler with only one extra function evaluation per step.
+    ```python
+    method='rk2'
+    ```
+  </Card>
+  <Card title="rk4" icon="4">
+    Classical fourth-order Runge-Kutta. High accuracy for smooth deterministic equations; four function evaluations per step.
+    ```python
+    method='rk4'
+    ```
+  </Card>
+  <Card title="heun" icon="wave-square">
+    Stochastic Heun method for **Stratonovich** stochastic differential equations with non-diagonal multiplicative noise. Second-order for deterministic parts.
+    ```python
+    method='heun'
+    ```
+  </Card>
+  <Card title="milstein" icon="sigma">
+    Derivative-free Milstein method for **Itô** stochastic differential equations with **diagonal** multiplicative noise. More accurate than Euler-Maruyama for multiplicative noise.
+    ```python
+    method='milstein'
+    ```
+  </Card>
+</CardGroup>
+
+### GSL Methods (Experimental)
+
+The methods below use ODE solvers from the [GNU Scientific Library](https://www.gnu.org/software/gsl/manual/html_node/Ordinary-Differential-Equations.html) and feature **adaptive step sizes**. They are considered experimental.
+
+| Method name | Algorithm |
+|-------------|-----------|
+| `gsl` | Default GSL integrator (rkf45) |
+| `gsl_rkf45` | Runge-Kutta-Fehlberg 4(5) — good general-purpose method |
+| `gsl_rk2` | Second-order Runge-Kutta (GSL) |
+| `gsl_rk4` | Fourth-order Runge-Kutta (GSL) |
+| `gsl_rkck` | Runge-Kutta Cash-Karp |
+| `gsl_rk8pd` | Runge-Kutta Prince-Dormand (8th order) |
+
+## Choosing a Method Manually
+
+Pass the `method` keyword to `NeuronGroup`, `Synapses`, or `SpatialNeuron`:
+
+```python
+from brian2 import *
+
+tau = 10 * ms
+G = NeuronGroup(100, 'dv/dt = -v / tau : volt',
+                threshold='v > -50*mV',
+                reset='v = -70*mV',
+                method='euler')
+```
+
+For `Synapses`:
+
+```python
+S = Synapses(P, Q,
+             model='''dg/dt = -g / tau_s : siemens
+                       w : siemens''',
+             on_pre='g += w',
+             method='exponential_euler')
+```
+
+Specifying the method manually avoids the time Brian spends trying other methods and suppresses the `INFO` message.
+
+<Warning>
+If you receive `NaN` (not-a-number) values in state variables or see large unphysical oscillations, the automatically chosen integration method may be inappropriate for your parameter regime. Try switching to a smaller timestep or a more accurate method such as `rk4`. Brian2 will emit a warning but will not raise an error when NaN values appear.
+</Warning>
+
+## Default Method Selection
+
+Brian2's automatic method selection follows a priority order:
+
+- **`NeuronGroup` and `Synapses`**: tries `exact`, then `euler`, then `heun`.
+- **`SpatialNeuron`**: tries `exact`, `exponential_euler`, `rk2`, then `heun`.
+
+The first method that is applicable to your equations (based on their mathematical structure) is used.
+
+## Stochastic Integration Methods
+
+For stochastic differential equations (SDEs) — equations containing the `xi` noise term — Brian2 selects the Euler-Maruyama (`euler`) method by default for additive noise. For multiplicative noise, consider `heun` or `milstein`:
+
+```python
+# Ornstein-Uhlenbeck process — additive noise, euler is fine
+G_ou = NeuronGroup(N,
+    'dv/dt = -v/tau + sigma*sqrt(2/tau)*xi : volt',
+    method='euler')
+
+# Multiplicative noise — milstein gives better accuracy
+G_mult = NeuronGroup(N,
+    'dv/dt = -v/tau + sigma*v*xi : volt',
+    method='milstein')
+```
+
+The `heun` method targets the Stratonovich interpretation of SDEs; `milstein` targets the Itô interpretation with diagonal (scalar) multiplicative noise.
+
+## GSL Integration (Adaptive Step Size)
+
+GSL-based methods automatically reduce their internal step size when the estimated integration error exceeds a threshold, and increase it when accuracy is better than required. The benefits are:
+
+<Steps>
+  <Step title="Error checking">
+    GSL methods estimate the integration error at each step. Non-GSL methods have no such built-in check.
+  </Step>
+  <Step title="Mixed time scales">
+    A large Brian2 `dt` can be used even when some neurons or synapses have fast dynamics. GSL will internally use a finer step only where needed. This is especially useful for Hodgkin-Huxley models where the fast Na⁺ gating variables otherwise force a very small global timestep.
+  </Step>
+</Steps>
+
+```python
+# Use GSL with default rkf45 integrator
+G = NeuronGroup(N, hh_equations,
+                threshold='v > 0*mV',
+                reset='',
+                method='gsl')
+```
+
+### GSL Method Options
+
+Pass a `method_options` dictionary to configure GSL behaviour:
+
+```python
+G = NeuronGroup(N, hh_equations,
+                method='gsl_rkf45',
+                method_options={
+                    'adaptable_timestep': True,   # default
+                    'absolute_error': 1e-6,        # per-variable error bound (base units)
+                    'absolute_error_per_variable': {'v': 1e-4},  # override for v
+                    'max_steps': 100,              # max GSL steps per Brian dt
+                    'use_last_timestep': True,     # reuse last GSL dt as initial guess
+                    'save_failed_steps': False,    # save count of rejected steps
+                    'save_step_count': False,      # save total GSL steps per Brian dt
+                })
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `adaptable_timestep` | `True` | Let GSL reduce timestep for accuracy |
+| `absolute_error` | `1e-6` | Max allowed error for any variable (base units) |
+| `absolute_error_per_variable` | `None` | Per-variable error overrides |
+| `max_steps` | `100` | Max GSL sub-steps per Brian timestep (0 = unlimited) |
+| `use_last_timestep` | `True` | Reuse last successful GSL dt as starting guess |
+| `save_failed_steps` | `False` | Record rejected steps in `_failed_steps` |
+| `save_step_count` | `False` | Record total sub-steps in `_step_count` |
+
+<Note>
+Recording `_last_timestep`, `_failed_steps`, or `_step_count` requires at least one call to `run` (even `run(0*ms)`) before creating the `StateMonitor`, because the code generation must run first to create these variables.
+</Note>
+
+<Warning>
+Setting `adaptable_timestep=False` with `gsl` methods means GSL will use Brian's fixed `dt`. If the integration error exceeds `absolute_error` at that step size, the simulation is aborted with an `IntegrationError` (when using Cython code generation).
+</Warning>
+
+## Example: Overriding the Method
+
+```python
+from brian2 import *
+
+# Hodgkin-Huxley equations (simplified)
+hh_eqs = '''
+dv/dt   = (I_Na + I_K + I_L + I_ext) / Cm : volt
+dm/dt   = alpha_m*(1-m) - beta_m*m : 1
+dh/dt   = alpha_h*(1-h) - beta_h*h : 1
+dn/dt   = alpha_n*(1-n) - beta_n*n : 1
+I_Na    = gNa*m**3*h*(ENa - v) : amp
+I_K     = gK*n**4*(EK  - v) : amp
+I_L     = gL*(EL - v) : amp
+'''
+
+# rk4 is a good choice for deterministic HH models
+G_hh = NeuronGroup(1, hh_eqs, method='rk4',
+                   threshold='v > -20*mV',
+                   refractory='v > -20*mV')
+
+# Or use GSL for adaptive accuracy
+G_hh_gsl = NeuronGroup(1, hh_eqs, method='gsl',
+                        threshold='v > -20*mV',
+                        refractory='v > -20*mV')
+```
+
+```python
+# Forcing a specific method on Synapses
+S = Synapses(P, Q,
+             model='dg/dt = -g / (5*ms) : siemens',
+             on_pre='g += 1*nS',
+             method='exact')   # linear equation — exact is optimal
+```

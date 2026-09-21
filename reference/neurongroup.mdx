@@ -1,0 +1,267 @@
+---
+title: "NeuronGroup API Reference — Brian2 Neuron Population Class"
+sidebarTitle: "NeuronGroup"
+description: "Complete API reference for Brian2's NeuronGroup class. Parameters, attributes, and methods for defining and simulating populations of spiking neurons."
+---
+
+`NeuronGroup` is the central building block of almost every Brian2 simulation. It represents a homogeneous population of neurons whose dynamics are described by a set of differential equations, subexpressions, and parameters written in Brian2's equation syntax. Each group owns an internal `StateUpdater` that numerically integrates the model at every time step, a `Thresholder` that checks for spike events, and a `Resetter` that applies post-spike reset statements. By combining these components with optional refractoriness, custom events, and scheduling controls, `NeuronGroup` can describe anything from a simple leaky integrate-and-fire circuit to a detailed Hodgkin–Huxley neuron population.
+
+## Constructor
+
+```python
+NeuronGroup(
+    N,
+    model,
+    method=("exact", "euler", "heun"),
+    threshold=None,
+    reset=None,
+    refractory=False,
+    events=None,
+    namespace=None,
+    dtype=None,
+    dt=None,
+    clock=None,
+    order=0,
+    name="neurongroup*",
+)
+```
+
+### Parameters
+
+<ParamField path="N" type="int" required>
+  Number of neurons in the group. Must be a positive integer (≥ 1).
+</ParamField>
+
+<ParamField path="model" type="str | Equations" required>
+  The differential equations, subexpressions, and parameters that define the
+  neuron dynamics. Can be a multi-line string in Brian2 equation syntax or an
+  `Equations` object. Variable names ending in `_pre` or `_post` are reserved
+  for synaptic use and are not allowed here.
+
+  ```
+  eqs = """
+  dv/dt = (I - v) / tau : volt
+  I : volt
+  tau : second
+  """
+  ```
+</ParamField>
+
+<ParamField path="method" type="str | tuple | callable" default='("exact", "euler", "heun")'>
+  The numerical integration method to use. A string name such as `"euler"`,
+  `"heun"`, `"rk4"`, `"exponential_euler"`, or `"exact"` selects a registered
+  integrator. A tuple of names causes Brian2 to pick the first applicable
+  method automatically. A callable may also be supplied; it receives an
+  `Equations` object and returns abstract integration code.
+</ParamField>
+
+<ParamField path="threshold" type="str" optional>
+  A single-line boolean string expression that, when `True`, marks a neuron as
+  having fired a spike during this time step. For example `'v > -50*mV'`. When
+  a threshold is provided it automatically creates the `"spike"` event.
+  Cannot be combined with an `events` dict that also defines `"spike"`.
+</ParamField>
+
+<ParamField path="reset" type="str" optional>
+  A (possibly multi-line) string containing statements executed immediately
+  after a neuron spikes. Variables referenced here are those of the neuron
+  model. For example `'v = v_reset\nw += b'`.
+</ParamField>
+
+<ParamField path="refractory" type="str | Quantity" default="False">
+  Specifies the refractory behaviour after a spike. Three forms are accepted:
+
+  - A `Quantity` such as `2*ms` — neurons are silent for that fixed duration.
+  - A string expression evaluating to a `Quantity` — a variable refractory
+    period, e.g. `'(1 + rand())*ms'`.
+  - A boolean string expression — the neuron remains refractory as long as
+    the condition is `True`, e.g. `'v > -20*mV'`.
+
+  When `False` (the default), refractoriness is disabled entirely.
+</ParamField>
+
+<ParamField path="events" type="dict" optional>
+  A dictionary mapping event name strings to boolean string conditions. Used to
+  define custom events in addition to (or instead of) the standard `"spike"`
+  event produced by `threshold`. For example:
+  `{'my_event': 'v > 0*mV'}`.
+  Custom events can later be used to trigger code via `run_on_event`.
+</ParamField>
+
+<ParamField path="namespace" type="dict" optional>
+  A dictionary mapping identifier names to Python objects (e.g. physical
+  constants, `TimedArray` instances, or plain numbers). If not provided,
+  Brian2 resolves identifiers at run time from the local and global scope of
+  the `Network.run` call.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  The simulation time step for this group. Mutually exclusive with `clock`.
+  When neither is provided, `defaultclock` is used.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  An explicit `Clock` object to drive this group. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Integer priority used to break ties between objects sharing the same
+  scheduling slot and clock. Lower values are scheduled first. The value is
+  propagated to the group's internal `state_updater`, `thresholder`, and
+  `resetter`.
+</ParamField>
+
+<ParamField path="name" type="str" default='"neurongroup*"'>
+  A unique name for this object. The trailing `*` causes Brian2 to append an
+  auto-increment suffix to avoid collisions (`neurongroup_0`, `neurongroup_1`,
+  …). An explicit name (without `*`) is used verbatim.
+</ParamField>
+
+---
+
+## Key Attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `N` | `int` | Number of neurons (read-only constant). |
+| `t` | `Quantity` | Current simulation time (shared with the clock). |
+| `dt` | `Quantity` | Time step of the associated clock. |
+| `i` | `ndarray` | Read-only integer array `[0, 1, …, N-1]` for indexing within model equations. |
+| `equations` | `Equations` | The processed equations object (after refractoriness is added). |
+| `user_equations` | `Equations` | The original equations as supplied by the user. |
+| `events` | `dict` | Maps event names to their threshold condition strings. |
+| `state_updater` | `StateUpdater` | The `CodeRunner` performing numerical integration. |
+| `thresholder` | `dict` | Maps event names to their `Thresholder` objects. |
+| `resetter` | `dict` | Maps event names to their `Resetter` objects. |
+| `spikes` | `ndarray` | Indices of neurons that spiked during the most recent time step (available in runtime mode). |
+
+All state variables declared in `model` are accessible as attributes on the group (e.g. `group.v`, `group.w`) and support NumPy-style indexing and assignment.
+
+---
+
+## Methods
+
+### `run_regularly`
+
+Run a snippet of abstract code on every time step (or a custom clock) within
+the group's namespace.
+
+```python
+NeuronGroup.run_regularly(
+    code,
+    dt=None,
+    clock=None,
+    when="start",
+    order=0,
+    name=None,
+)
+```
+
+**Parameters**
+
+<ParamField path="code" type="str" required>
+  Abstract code string to execute. May reference any variable defined in the
+  model or the group's namespace.
+</ParamField>
+
+<ParamField path="dt" type="Quantity" optional>
+  Custom time step; creates a dedicated `Clock`. Mutually exclusive with `clock`.
+</ParamField>
+
+<ParamField path="clock" type="Clock" optional>
+  An existing `Clock` to use. Mutually exclusive with `dt`.
+</ParamField>
+
+<ParamField path="when" type="str" default='"start"'>
+  The scheduling slot in which to execute the code. One of `'start'`,
+  `'groups'`, `'thresholds'`, `'synapses'`, `'resets'`, `'end'`, etc.
+</ParamField>
+
+<ParamField path="order" type="int" default="0">
+  Priority within the scheduling slot.
+</ParamField>
+
+<ParamField path="name" type="str" optional>
+  Explicit name for the `CodeRunner` object that is created. If omitted, a
+  name is derived from the group name.
+</ParamField>
+
+**Returns** a `CodeRunner` instance that has already been added to the group's
+`contained_objects`. Setting `runner.active = False` temporarily disables it.
+
+---
+
+### `set_event_schedule`
+
+Change the scheduling slot used to check the condition for a custom event.
+
+```python
+NeuronGroup.set_event_schedule(event, when="after_thresholds", order=None)
+```
+
+**Parameters**
+
+<ParamField path="event" type="str" required>
+  The name of the event to reschedule (must be present in `self.events`).
+</ParamField>
+
+<ParamField path="when" type="str" default='"after_thresholds"'>
+  The target scheduling slot.
+</ParamField>
+
+<ParamField path="order" type="int" optional>
+  New priority; defaults to `self.order` if not specified.
+</ParamField>
+
+---
+
+## Subgrouping
+
+A contiguous slice of neurons can be obtained with standard Python indexing:
+
+```python
+sub = G[10:20]   # neurons 10–19
+```
+
+The returned `Subgroup` shares the same underlying variables and can be used
+anywhere a `NeuronGroup` is expected (e.g. as the source or target of
+`Synapses`).
+
+---
+
+## Example
+
+```python
+from brian2 import *
+
+tau = 10 * ms
+v_reset = -70 * mV
+v_thresh = -50 * mV
+
+eqs = """
+dv/dt = (v_rest - v + R * I_ext) / tau : volt
+I_ext : amp
+"""
+
+G = NeuronGroup(
+    100,
+    model=eqs,
+    threshold="v > v_thresh",
+    reset="v = v_reset",
+    refractory=2 * ms,
+    method="euler",
+    namespace={"v_rest": -65 * mV, "R": 100 * Mohm},
+)
+
+# Set initial conditions
+G.v = -65 * mV
+G.I_ext = "rand() * 2 * nA"
+
+# Record every 1 ms
+G.run_regularly("I_ext = rand() * 3 * nA", dt=1 * ms)
+
+spike_mon = SpikeMonitor(G)
+run(100 * ms)
+
+print(f"Total spikes: {spike_mon.num_spikes}")
+```
